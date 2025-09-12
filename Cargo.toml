@@ -1,0 +1,20 @@
+[package]
+name = "rust-route"
+version = "0.2.0"
+edition = "2021"
+authors = ["RustRoute Team"]
+description = "RustRoute: A simple RIP (Routing Information Protocol) implementation in Rust"
+
+[dependencies]
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+log = "0.4"
+env_logger = "0.10"
+rand = "0.8"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+colored = "2.0"
+indicatif = "0.17"
+console = "0.15"
+comfy-table = "7.0"

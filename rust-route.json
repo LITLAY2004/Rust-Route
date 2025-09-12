@@ -1,0 +1,19 @@
+{
+  "router_id": "00000000-0000-0000-0000-000000000000",
+  "port": 520,
+  "rip_version": 2,
+  "interfaces": [
+    {
+      "name": "eth0",
+      "ip_address": "192.168.1.10",
+      "subnet_mask": "255.255.255.0",
+      "enabled": true
+    }
+  ],
+  "update_interval": 30,
+  "holddown_timer": 180,
+  "garbage_collection_timer": 240,
+  "max_hop_count": 15,
+  "split_horizon": true,
+  "poison_reverse": false
+}
