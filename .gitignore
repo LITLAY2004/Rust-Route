@@ -1,1 +1,39 @@
-/target
+# Rust
+/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Runtime
+*.pid
+*.seed
+*.tmp
+
+# Coverage
+*.profraw
+/coverage/
+lcov.info
+
+# Benchmarks
+/target/criterion/
+
+# Security
+*.pem
+*.key
+secrets.json
+
+# Local development
+.env
+.env.local
+config.local.json

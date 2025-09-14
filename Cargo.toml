@@ -2,8 +2,22 @@
 name = "rust-route"
 version = "0.2.0"
 edition = "2021"
-authors = ["RustRoute Team"]
-description = "RustRoute: A simple RIP (Routing Information Protocol) implementation in Rust"
+authors = ["LITLAY2004 <your.email@example.com>"]
+license = "MIT"
+description = "A high-performance, production-ready RIP (Routing Information Protocol) router implementation written in Rust"
+documentation = "https://docs.rs/rust-route"
+homepage = "https://github.com/LITLAY2004/Rust-Route"
+repository = "https://github.com/LITLAY2004/Rust-Route"
+readme = "README.md"
+keywords = ["networking", "routing", "rip", "protocol", "router"]
+categories = ["network-programming", "command-line-utilities"]
+exclude = [
+    "target/*",
+    ".git/*",
+    ".github/*",
+    "*.log",
+    "*.tmp"
+]
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -18,3 +32,20 @@ colored = "2.0"
 indicatif = "0.17"
 console = "0.15"
 comfy-table = "7.0"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.0"
+tokio-test = "0.4"
+
+[[bench]]
+name = "routing_benchmarks"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+debug = true
