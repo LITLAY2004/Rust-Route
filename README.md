@@ -7,7 +7,7 @@
 
 <div align="center">
 
-**🚀 A high-performance, production-ready RIP (Routing Information Protocol) router implementation written in Rust**
+**🚀 A high-performance, production-ready RIP (Routing Information Protocol) router implementation written in Rust BY JINT ZHOU**
 
 *Fast • Reliable • Configurable • Production-Ready*
 
