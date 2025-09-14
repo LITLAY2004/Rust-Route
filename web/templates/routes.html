@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustRoute - Routing Table</title>
+    <link href="/static/css/style.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .routes-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: var(--border-radius);
+            overflow: hidden;
+            box-shadow: var(--shadow);
+        }
+        
+        .routes-table th,
+        .routes-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .routes-table th {
+            background-color: var(--bg-tertiary);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .routes-table tr:hover {
+            background-color: var(--bg-secondary);
+        }
+        
+        .route-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-danger {
+            background-color: var(--error-color);
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+        
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: var(--primary-dark);
+        }
+        
+        .metric-badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        .metric-low {
+            background-color: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+        }
+        
+        .metric-medium {
+            background-color: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+        }
+        
+        .metric-high {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--error-color);
+        }
+        
+        .search-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            align-items: center;
+        }
+        
+        .search-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 0.875rem;
+        }
+        
+        .filter-select {
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            font-size: 0.875rem;
+            min-width: 150px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="nav-brand">
+                <i class="fas fa-route"></i>
+                <span>RustRoute</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="/dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+                <li><a href="/routes" class="active"><i class="fas fa-map-signs"></i> Routes</a></li>
+                <li><a href="/config"><i class="fas fa-cog"></i> Config</a></li>
+                <li><a href="/metrics"><i class="fas fa-chart-line"></i> Metrics</a></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="page-header">
+                <h1><i class="fas fa-map-signs"></i> Routing Table</h1>
+                <button class="btn btn-primary" onclick="refreshRoutes()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </header>
+
+            <!-- Search and Filter Controls -->
+            <div class="search-controls">
+                <input type="text" class="search-input" id="search-input" placeholder="Search routes by destination, next hop, or interface...">
+                <select class="filter-select" id="metric-filter">
+                    <option value="">All Metrics</option>
+                    <option value="low">Low (1-5)</option>
+                    <option value="medium">Medium (6-10)</option>
+                    <option value="high">High (11+)</option>
+                </select>
+                <select class="filter-select" id="interface-filter">
+                    <option value="">All Interfaces</option>
+                </select>
+            </div>
+
+            <!-- Routes Summary -->
+            <div class="stats-grid" style="margin-bottom: 2rem;">
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-route"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Total Routes</h3>
+                        <p id="total-routes">Loading...</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, var(--success-color), #059669);">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Active Routes</h3>
+                        <p id="active-routes">Loading...</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, var(--warning-color), #d97706);">
+                        <i class="fas fa-exclamation-triangle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>High Metric</h3>
+                        <p id="high-metric-routes">Loading...</p>
+                    </div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-icon" style="background: linear-gradient(135deg, var(--info-color), #0891b2);">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Avg Age</h3>
+                        <p id="avg-age">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Routes Table -->
+            <div style="background: white; border-radius: var(--border-radius); overflow: hidden; box-shadow: var(--shadow);">
+                <table class="routes-table" id="routes-table">
+                    <thead>
+                        <tr>
+                            <th>Destination</th>
+                            <th>Next Hop</th>
+                            <th>Metric</th>
+                            <th>Interface</th>
+                            <th>Age</th>
+                            <th>Learned From</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="routes-tbody">
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 2rem;">
+                                <div class="spinner"></div>
+                                <div style="margin-top: 1rem;">Loading routes...</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        class RoutesManager {
+            constructor() {
+                this.routes = [];
+                this.filteredRoutes = [];
+                this.init();
+            }
+
+            async init() {
+                await this.loadRoutes();
+                this.setupEventListeners();
+                this.setupRealTimeUpdates();
+            }
+
+            async loadRoutes() {
+                try {
+                    const response = await fetch('/api/routes');
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        this.routes = data.data;
+                        this.filteredRoutes = [...this.routes];
+                        this.updateRoutesTable();
+                        this.updateStatistics();
+                        this.updateInterfaceFilter();
+                    }
+                } catch (error) {
+                    console.error('Failed to load routes:', error);
+                }
+            }
+
+            updateRoutesTable() {
+                const tbody = document.getElementById('routes-tbody');
+                
+                if (this.filteredRoutes.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem;">No routes found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = this.filteredRoutes.map(route => `
+                    <tr>
+                        <td><code>${route.destination}</code></td>
+                        <td><code>${route.next_hop}</code></td>
+                        <td>
+                            <span class="metric-badge ${this.getMetricClass(route.metric)}">
+                                ${route.metric}
+                            </span>
+                        </td>
+                        <td><code>${route.interface}</code></td>
+                        <td>${this.formatAge(route.age)}</td>
+                        <td><code>${route.learned_from}</code></td>
+                        <td>
+                            <div class="route-actions">
+                                <button class="btn btn-danger" onclick="deleteRoute('${route.destination}')" title="Delete Route">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `).join('');
+            }
+
+            updateStatistics() {
+                const totalRoutes = this.routes.length;
+                const activeRoutes = this.routes.filter(r => r.metric < 16).length;
+                const highMetricRoutes = this.routes.filter(r => r.metric >= 11).length;
+                const avgAge = totalRoutes > 0 ? Math.round(this.routes.reduce((sum, r) => sum + r.age, 0) / totalRoutes) : 0;
+
+                document.getElementById('total-routes').textContent = totalRoutes;
+                document.getElementById('active-routes').textContent = activeRoutes;
+                document.getElementById('high-metric-routes').textContent = highMetricRoutes;
+                document.getElementById('avg-age').textContent = this.formatAge(avgAge);
+            }
+
+            updateInterfaceFilter() {
+                const interfaceFilter = document.getElementById('interface-filter');
+                const interfaces = [...new Set(this.routes.map(r => r.interface))];
+                
+                const currentValue = interfaceFilter.value;
+                interfaceFilter.innerHTML = '<option value="">All Interfaces</option>' +
+                    interfaces.map(iface => `<option value="${iface}">${iface}</option>`).join('');
+                interfaceFilter.value = currentValue;
+            }
+
+            setupEventListeners() {
+                const searchInput = document.getElementById('search-input');
+                const metricFilter = document.getElementById('metric-filter');
+                const interfaceFilter = document.getElementById('interface-filter');
+
+                searchInput.addEventListener('input', () => this.filterRoutes());
+                metricFilter.addEventListener('change', () => this.filterRoutes());
+                interfaceFilter.addEventListener('change', () => this.filterRoutes());
+            }
+
+            filterRoutes() {
+                const searchTerm = document.getElementById('search-input').value.toLowerCase();
+                const metricFilter = document.getElementById('metric-filter').value;
+                const interfaceFilter = document.getElementById('interface-filter').value;
+
+                this.filteredRoutes = this.routes.filter(route => {
+                    // Search filter
+                    const matchesSearch = !searchTerm || 
+                        route.destination.toLowerCase().includes(searchTerm) ||
+                        route.next_hop.toLowerCase().includes(searchTerm) ||
+                        route.interface.toLowerCase().includes(searchTerm);
+
+                    // Metric filter
+                    const matchesMetric = !metricFilter || 
+                        (metricFilter === 'low' && route.metric <= 5) ||
+                        (metricFilter === 'medium' && route.metric >= 6 && route.metric <= 10) ||
+                        (metricFilter === 'high' && route.metric >= 11);
+
+                    // Interface filter
+                    const matchesInterface = !interfaceFilter || route.interface === interfaceFilter;
+
+                    return matchesSearch && matchesMetric && matchesInterface;
+                });
+
+                this.updateRoutesTable();
+            }
+
+            setupRealTimeUpdates() {
+                setInterval(() => {
+                    this.loadRoutes();
+                }, 10000); // Update every 10 seconds
+            }
+
+            getMetricClass(metric) {
+                if (metric <= 5) return 'metric-low';
+                if (metric <= 10) return 'metric-medium';
+                return 'metric-high';
+            }
+
+            formatAge(seconds) {
+                if (seconds < 60) return `${seconds}s`;
+                if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+                if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+                return `${Math.floor(seconds / 86400)}d`;
+            }
+        }
+
+        // Global functions
+        let routesManager;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            routesManager = new RoutesManager();
+        });
+
+        async function refreshRoutes() {
+            await routesManager.loadRoutes();
+        }
+
+        async function deleteRoute(destination) {
+            if (!confirm(`Are you sure you want to delete the route to ${destination}?`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/routes/${encodeURIComponent(destination)}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    await routesManager.loadRoutes();
+                    alert('Route deleted successfully');
+                } else {
+                    alert('Failed to delete route: ' + data.message);
+                }
+            } catch (error) {
+                console.error('Failed to delete route:', error);
+                alert('Failed to delete route');
+            }
+        }
+    </script>
+</body>
+</html>

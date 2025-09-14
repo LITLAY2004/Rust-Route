@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustRoute - Dashboard</title>
+    <link href="/static/css/style.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Navigation -->
+        <nav class="navbar">
+            <div class="nav-brand">
+                <i class="fas fa-route"></i>
+                <span>RustRoute</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="/dashboard" class="active"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+                <li><a href="/routes"><i class="fas fa-map-signs"></i> Routes</a></li>
+                <li><a href="/config"><i class="fas fa-cog"></i> Config</a></li>
+                <li><a href="/metrics"><i class="fas fa-chart-line"></i> Metrics</a></li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="page-header">
+                <h1><i class="fas fa-tachometer-alt"></i> System Dashboard</h1>
+                <div class="status-indicator">
+                    <span class="status-dot online"></span>
+                    <span>Router Online</span>
+                </div>
+            </header>
+
+            <!-- System Status Cards -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Uptime</h3>
+                        <p id="uptime">Loading...</p>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-route"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Active Routes</h3>
+                        <p id="route-count">Loading...</p>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-network-wired"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Interfaces</h3>
+                        <p id="interface-count">Loading...</p>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-memory"></i>
+                    </div>
+                    <div class="stat-content">
+                        <h3>Memory Usage</h3>
+                        <p id="memory-usage">Loading...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Section -->
+            <div class="charts-section">
+                <div class="chart-container">
+                    <h3><i class="fas fa-chart-line"></i> Network Traffic</h3>
+                    <canvas id="trafficChart"></canvas>
+                </div>
+
+                <div class="chart-container">
+                    <h3><i class="fas fa-chart-pie"></i> Route Distribution</h3>
+                    <canvas id="routeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="activity-section">
+                <h3><i class="fas fa-history"></i> Recent Activity</h3>
+                <div class="activity-log" id="activity-log">
+                    <div class="activity-item">
+                        <span class="activity-time">10:30:15</span>
+                        <span class="activity-type info">INFO</span>
+                        <span class="activity-message">Route to 192.168.2.0/24 learned from 192.168.1.1</span>
+                    </div>
+                    <div class="activity-item">
+                        <span class="activity-time">10:29:42</span>
+                        <span class="activity-type success">SUCCESS</span>
+                        <span class="activity-message">Interface eth0 is up and running</span>
+                    </div>
+                    <div class="activity-item">
+                        <span class="activity-time">10:28:33</span>
+                        <span class="activity-type warning">WARNING</span>
+                        <span class="activity-message">Route to 10.0.0.0/8 metric increased to 15</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Interface Status -->
+            <div class="interfaces-section">
+                <h3><i class="fas fa-network-wired"></i> Network Interfaces</h3>
+                <div class="interface-grid" id="interface-grid">
+                    <!-- Interfaces will be loaded dynamically -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/dashboard.js"></script>
+    <script>
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeDashboard();
+            startRealTimeUpdates();
+        });
+    </script>
+</body>
+</html>

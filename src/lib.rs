@@ -10,6 +10,11 @@ pub mod routing_table;
 pub mod metrics;
 pub mod cli;
 pub mod testing;
+pub mod web;
+pub mod auth;
+pub mod ipv6;
+pub mod config_manager;
+pub mod network_discovery;
 
 use std::error::Error;
 use std::fmt;

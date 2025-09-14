@@ -1,7 +1,70 @@
 //! CLI formatting and user interface utilities
 
+use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
+
+#[derive(Parser)]
+#[command(name = "rust-route")]
+#[command(about = "🦀 RustRoute: Advanced RIP Router Implementation")]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Start the RustRoute router
+    Start {
+        /// Configuration file path
+        #[arg(short, long, default_value = "rust-route.json")]
+        config: String,
+    },
+    /// Test router functionality
+    Test {
+        /// Run specific test
+        #[arg(short, long)]
+        test_name: Option<String>,
+    },
+    /// Run benchmarks
+    Benchmark,
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Validate configuration file
+    Validate {
+        /// Configuration file to validate
+        file: String,
+    },
+    /// Generate default configuration
+    Generate {
+        /// Output file path
+        #[arg(short, long, default_value = "rust-route.json")]
+        output: String,
+    },
+    /// Create configuration backup
+    Backup {
+        /// Configuration file to backup
+        config: String,
+        /// Output backup file (optional)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Restore configuration from backup
+    Restore {
+        /// Backup file to restore from
+        backup: String,
+        /// Configuration file to restore to
+        config: String,
+    },
+}
 
 /// CLI formatter for consistent output
 pub struct CliFormatter;
