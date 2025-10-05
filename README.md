@@ -109,8 +109,8 @@ rust-route/
 
 ## 前端可视化界面截图
 
-![前端界面截图](examples/屏幕截图 2025-10-05 183642.png)
-![前端界面截图](examples/屏幕截图 2025-10-05 183648.png)
-![前端界面截图](examples/屏幕截图 2025-10-05 183708.png)
-![前端界面截图](examples/屏幕截图 2025-10-05 183722.png)
+<img width="1845" height="927" alt="屏幕截图 2025-10-05 183642" src="https://github.com/user-attachments/assets/b79855d1-3271-4b83-8b0e-9ff854457043" />
+<img width="1857" height="894" alt="屏幕截图 2025-10-05 183648" src="https://github.com/user-attachments/assets/67a06b58-2e58-4b78-9eea-c9b50b3f47e7" />
+<img width="1854" height="917" alt="屏幕截图 2025-10-05 183708" src="https://github.com/user-attachments/assets/9caa74a9-2433-4bd6-adaa-a25688c1cfaa" />
+<img width="1839" height="917" alt="屏幕截图 2025-10-05 183722" src="https://github.com/user-attachments/assets/95cf638e-d469-4ffa-8454-5315b816cce6" />
 
