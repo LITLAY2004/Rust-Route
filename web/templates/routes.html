@@ -127,18 +127,54 @@
                 <li><a href="/config"><i class="fas fa-cog"></i> Config</a></li>
                 <li><a href="/metrics"><i class="fas fa-chart-line"></i> Metrics</a></li>
             </ul>
+            <button id="logout-button" class="logout-button hidden">
+                <i class="fas fa-sign-out-alt"></i>
+                Logout
+            </button>
         </nav>
 
         <!-- Main Content -->
         <main class="main-content">
             <header class="page-header">
                 <h1><i class="fas fa-map-signs"></i> Routing Table</h1>
-                <button class="btn btn-primary" onclick="refreshRoutes()">
-                    <i class="fas fa-sync-alt"></i> Refresh
-                </button>
+                <div>
+                    <button id="refresh-button" class="btn btn-primary">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
             </header>
 
-            <!-- Search and Filter Controls -->
+            <section class="card" style="margin-bottom: 2rem;">
+                <h2 style="margin-bottom: 1rem; font-size: 1.25rem;">Add Static Route</h2>
+                <form id="create-route-form" class="form-grid">
+                    <div class="form-group">
+                        <label for="route-destination">Destination</label>
+                        <input id="route-destination" name="destination" type="text" placeholder="e.g. 10.1.0.0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-mask">Subnet Mask</label>
+                        <input id="route-mask" name="mask" type="text" placeholder="e.g. 255.255.255.0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-next-hop">Next Hop</label>
+                        <input id="route-next-hop" name="next_hop" type="text" placeholder="e.g. 192.168.1.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-interface">Interface</label>
+                        <input id="route-interface" name="interface" type="text" placeholder="e.g. eth0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="route-metric">Metric (optional)</label>
+                        <input id="route-metric" name="metric" type="number" min="1" max="16" placeholder="1">
+                    </div>
+                    <div class="form-group form-actions">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Add Route
+                        </button>
+                    </div>
+                </form>
+            </section>
+
             <div class="search-controls">
                 <input type="text" class="search-input" id="search-input" placeholder="Search routes by destination, next hop, or interface...">
                 <select class="filter-select" id="metric-filter">
@@ -222,180 +258,23 @@
         </main>
     </div>
 
-    <script>
-        class RoutesManager {
-            constructor() {
-                this.routes = [];
-                this.filteredRoutes = [];
-                this.init();
-            }
+    <div id="login-modal" class="auth-modal hidden">
+        <div class="auth-modal__content">
+            <h2><i class="fas fa-lock"></i> 登录</h2>
+            <form id="login-form">
+                <label for="auth-username">Username</label>
+                <input id="auth-username" name="username" type="text" required autofocus>
 
-            async init() {
-                await this.loadRoutes();
-                this.setupEventListeners();
-                this.setupRealTimeUpdates();
-            }
+                <label for="auth-password">Password</label>
+                <input id="auth-password" name="password" type="password" required>
 
-            async loadRoutes() {
-                try {
-                    const response = await fetch('/api/routes');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        this.routes = data.data;
-                        this.filteredRoutes = [...this.routes];
-                        this.updateRoutesTable();
-                        this.updateStatistics();
-                        this.updateInterfaceFilter();
-                    }
-                } catch (error) {
-                    console.error('Failed to load routes:', error);
-                }
-            }
+                <button type="submit" class="auth-button">Login</button>
+                <div id="login-error" class="auth-error hidden"></div>
+            </form>
+        </div>
+    </div>
 
-            updateRoutesTable() {
-                const tbody = document.getElementById('routes-tbody');
-                
-                if (this.filteredRoutes.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem;">No routes found</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = this.filteredRoutes.map(route => `
-                    <tr>
-                        <td><code>${route.destination}</code></td>
-                        <td><code>${route.next_hop}</code></td>
-                        <td>
-                            <span class="metric-badge ${this.getMetricClass(route.metric)}">
-                                ${route.metric}
-                            </span>
-                        </td>
-                        <td><code>${route.interface}</code></td>
-                        <td>${this.formatAge(route.age)}</td>
-                        <td><code>${route.learned_from}</code></td>
-                        <td>
-                            <div class="route-actions">
-                                <button class="btn btn-danger" onclick="deleteRoute('${route.destination}')" title="Delete Route">
-                                    <i class="fas fa-trash"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
-            }
-
-            updateStatistics() {
-                const totalRoutes = this.routes.length;
-                const activeRoutes = this.routes.filter(r => r.metric < 16).length;
-                const highMetricRoutes = this.routes.filter(r => r.metric >= 11).length;
-                const avgAge = totalRoutes > 0 ? Math.round(this.routes.reduce((sum, r) => sum + r.age, 0) / totalRoutes) : 0;
-
-                document.getElementById('total-routes').textContent = totalRoutes;
-                document.getElementById('active-routes').textContent = activeRoutes;
-                document.getElementById('high-metric-routes').textContent = highMetricRoutes;
-                document.getElementById('avg-age').textContent = this.formatAge(avgAge);
-            }
-
-            updateInterfaceFilter() {
-                const interfaceFilter = document.getElementById('interface-filter');
-                const interfaces = [...new Set(this.routes.map(r => r.interface))];
-                
-                const currentValue = interfaceFilter.value;
-                interfaceFilter.innerHTML = '<option value="">All Interfaces</option>' +
-                    interfaces.map(iface => `<option value="${iface}">${iface}</option>`).join('');
-                interfaceFilter.value = currentValue;
-            }
-
-            setupEventListeners() {
-                const searchInput = document.getElementById('search-input');
-                const metricFilter = document.getElementById('metric-filter');
-                const interfaceFilter = document.getElementById('interface-filter');
-
-                searchInput.addEventListener('input', () => this.filterRoutes());
-                metricFilter.addEventListener('change', () => this.filterRoutes());
-                interfaceFilter.addEventListener('change', () => this.filterRoutes());
-            }
-
-            filterRoutes() {
-                const searchTerm = document.getElementById('search-input').value.toLowerCase();
-                const metricFilter = document.getElementById('metric-filter').value;
-                const interfaceFilter = document.getElementById('interface-filter').value;
-
-                this.filteredRoutes = this.routes.filter(route => {
-                    // Search filter
-                    const matchesSearch = !searchTerm || 
-                        route.destination.toLowerCase().includes(searchTerm) ||
-                        route.next_hop.toLowerCase().includes(searchTerm) ||
-                        route.interface.toLowerCase().includes(searchTerm);
-
-                    // Metric filter
-                    const matchesMetric = !metricFilter || 
-                        (metricFilter === 'low' && route.metric <= 5) ||
-                        (metricFilter === 'medium' && route.metric >= 6 && route.metric <= 10) ||
-                        (metricFilter === 'high' && route.metric >= 11);
-
-                    // Interface filter
-                    const matchesInterface = !interfaceFilter || route.interface === interfaceFilter;
-
-                    return matchesSearch && matchesMetric && matchesInterface;
-                });
-
-                this.updateRoutesTable();
-            }
-
-            setupRealTimeUpdates() {
-                setInterval(() => {
-                    this.loadRoutes();
-                }, 10000); // Update every 10 seconds
-            }
-
-            getMetricClass(metric) {
-                if (metric <= 5) return 'metric-low';
-                if (metric <= 10) return 'metric-medium';
-                return 'metric-high';
-            }
-
-            formatAge(seconds) {
-                if (seconds < 60) return `${seconds}s`;
-                if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-                if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
-                return `${Math.floor(seconds / 86400)}d`;
-            }
-        }
-
-        // Global functions
-        let routesManager;
-
-        document.addEventListener('DOMContentLoaded', () => {
-            routesManager = new RoutesManager();
-        });
-
-        async function refreshRoutes() {
-            await routesManager.loadRoutes();
-        }
-
-        async function deleteRoute(destination) {
-            if (!confirm(`Are you sure you want to delete the route to ${destination}?`)) {
-                return;
-            }
-
-            try {
-                const response = await fetch(`/api/routes/${encodeURIComponent(destination)}`, {
-                    method: 'DELETE'
-                });
-                const data = await response.json();
-                
-                if (data.success) {
-                    await routesManager.loadRoutes();
-                    alert('Route deleted successfully');
-                } else {
-                    alert('Failed to delete route: ' + data.message);
-                }
-            } catch (error) {
-                console.error('Failed to delete route:', error);
-                alert('Failed to delete route');
-            }
-        }
-    </script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/routes.js" defer></script>
 </body>
 </html>

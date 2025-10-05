@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio::time::interval;
 
@@ -22,14 +22,14 @@ pub struct DiscoveryConfig {
 impl Default for DiscoveryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            discovery_interval: 300, // 5 minutes
-            neighbor_timeout: 900,   // 15 minutes
+            enabled: false,
+            discovery_interval: 300,
+            neighbor_timeout: 900,
             max_hops: 3,
-            use_icmp: true,
-            use_arp: true,
+            use_icmp: false,
+            use_arp: false,
             use_lldp: false,
-            subnet_scan: true,
+            subnet_scan: false,
         }
     }
 }
@@ -149,7 +149,7 @@ impl NetworkDiscovery {
         tokio::spawn(async move {
             loop {
                 interval.tick().await;
-                
+
                 let discovery = NetworkDiscovery {
                     config: config.clone(),
                     topology: topology.clone(),
@@ -170,7 +170,6 @@ impl NetworkDiscovery {
         log::info!("🔍 Starting network topology discovery");
 
         let mut discovered_nodes = HashMap::new();
-        let mut discovered_links = Vec::new();
         let mut subnet_info = Vec::new();
 
         // Discover nodes on local subnets
@@ -179,7 +178,7 @@ impl NetworkDiscovery {
                 if let IpAddr::V4(ipv4) = interface {
                     let subnet = self.get_subnet_for_interface(*ipv4).await?;
                     let nodes = self.scan_subnet(&subnet).await?;
-                    
+
                     for node in nodes {
                         discovered_nodes.insert(node.ip_address, node);
                     }
@@ -192,7 +191,7 @@ impl NetworkDiscovery {
         }
 
         // Discover links between nodes
-        discovered_links = self.discover_links(&discovered_nodes).await?;
+        let discovered_links = self.discover_links(&discovered_nodes).await?;
 
         // Perform neighbor discovery using various protocols
         if self.config.use_arp {
@@ -210,21 +209,19 @@ impl NetworkDiscovery {
         }
 
         // Update topology
-        let discovery_duration = start_time.elapsed()
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let discovery_duration = start_time.elapsed().unwrap_or_default().as_millis() as u64;
 
         {
             let mut topology = self.topology.write().await;
-            
+
             // Clean up expired nodes
             self.cleanup_expired_nodes(&mut topology.nodes).await;
-            
+
             // Update nodes
             for (ip, node) in discovered_nodes {
                 topology.nodes.insert(ip, node);
             }
-            
+
             // Update links
             topology.links = discovered_links;
             topology.subnets = subnet_info;
@@ -236,46 +233,39 @@ impl NetworkDiscovery {
         Ok(())
     }
 
-    async fn get_subnet_for_interface(&self, interface: Ipv4Addr) -> Result<ipnet::Ipv4Net, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_subnet_for_interface(
+        &self,
+        interface: Ipv4Addr,
+    ) -> Result<ipnet::Ipv4Net, Box<dyn std::error::Error + Send + Sync>> {
         // Simplified - in practice, would query system for actual subnet mask
         let subnet = format!("{}/24", interface);
         Ok(subnet.parse()?)
     }
 
-    async fn scan_subnet(&self, subnet: &ipnet::Ipv4Net) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn scan_subnet(
+        &self,
+        subnet: &ipnet::Ipv4Net,
+    ) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
         let mut nodes = Vec::new();
         let subnet_hosts: Vec<Ipv4Addr> = subnet.hosts().collect();
-        
+
         log::debug!("Scanning subnet {} ({} hosts)", subnet, subnet_hosts.len());
 
-        // Limit concurrent scans to avoid overwhelming the network
-        let chunk_size = 50;
-        for chunk in subnet_hosts.chunks(chunk_size) {
-            let mut tasks = Vec::new();
-            
-            for &ip in chunk {
-                let task = self.probe_host(IpAddr::V4(ip));
-                tasks.push(task);
+        for &ip in subnet_hosts.iter() {
+            if let Ok(Some(node)) = self.probe_host(IpAddr::V4(ip)).await {
+                nodes.push(node);
             }
-            
-            let results = futures::future::join_all(tasks).await;
-            for result in results {
-                if let Ok(Some(node)) = result {
-                    nodes.push(node);
-                }
-            }
-            
-            // Small delay between chunks
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
         log::debug!("Found {} active hosts in subnet {}", nodes.len(), subnet);
         Ok(nodes)
     }
 
-    async fn probe_host(&self, ip: IpAddr) -> Result<Option<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
-        let start_time = std::time::Instant::now();
-        
+    async fn probe_host(
+        &self,
+        ip: IpAddr,
+    ) -> Result<Option<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
         // ICMP ping
         if self.config.use_icmp {
             if let Ok(response_time) = self.ping_host(ip).await {
@@ -293,7 +283,7 @@ impl NetworkDiscovery {
                     is_router: self.is_router(ip).await,
                     routing_protocol: self.detect_routing_protocol(ip).await.ok(),
                 };
-                
+
                 return Ok(Some(node));
             }
         }
@@ -301,102 +291,87 @@ impl NetworkDiscovery {
         Ok(None)
     }
 
-    async fn ping_host(&self, _ip: IpAddr) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        // Simplified ping implementation
-        // In practice, would use actual ICMP ping
-        tokio::time::sleep(Duration::from_millis(1)).await;
-        Ok(1) // 1ms response time
+    async fn ping_host(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+        Err("ICMP probing not implemented".into())
     }
 
-    async fn get_mac_address(&self, _ip: IpAddr) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Would query ARP table or use network interface
-        Ok("00:11:22:33:44:55".to_string())
+    async fn get_mac_address(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Err("MAC lookup not implemented".into())
     }
 
-    async fn resolve_hostname(&self, _ip: IpAddr) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Would perform DNS reverse lookup
-        Ok("host.example.com".to_string())
+    async fn resolve_hostname(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Err("Reverse DNS lookup not implemented".into())
     }
 
     async fn detect_device_type(&self, _ip: IpAddr) -> DeviceType {
-        // Would analyze open ports, MAC vendor, etc.
-        DeviceType::Host
+        DeviceType::Unknown
     }
 
-    async fn detect_os(&self, _ip: IpAddr) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Would perform OS fingerprinting
-        Ok("Linux".to_string())
+    async fn detect_os(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Err("OS fingerprinting not implemented".into())
     }
 
-    async fn scan_common_ports(&self, _ip: IpAddr) -> Result<Vec<u16>, Box<dyn std::error::Error + Send + Sync>> {
-        // Would scan common ports (22, 23, 53, 80, 443, etc.)
-        Ok(vec![22, 80, 443])
+    async fn scan_common_ports(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<Vec<u16>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Vec::new())
     }
 
     async fn is_router(&self, _ip: IpAddr) -> bool {
-        // Would check for routing protocols, SNMP, etc.
         false
     }
 
-    async fn detect_routing_protocol(&self, _ip: IpAddr) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        // Would probe for RIP, OSPF, BGP, etc.
-        Ok("RIP".to_string())
+    async fn detect_routing_protocol(
+        &self,
+        _ip: IpAddr,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Err("Routing protocol detection not implemented".into())
     }
 
-    async fn discover_links(&self, nodes: &HashMap<IpAddr, NetworkNode>) -> Result<Vec<NetworkLink>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut links = Vec::new();
-        
-        // Analyze routing tables and traceroute to discover links
-        for (source_ip, _node) in nodes {
-            for (dest_ip, _) in nodes {
-                if source_ip != dest_ip {
-                    if let Ok(link) = self.analyze_link(*source_ip, *dest_ip).await {
-                        links.push(link);
-                    }
-                }
-            }
-        }
-        
-        Ok(links)
+    async fn discover_links(
+        &self,
+        _nodes: &HashMap<IpAddr, NetworkNode>,
+    ) -> Result<Vec<NetworkLink>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Vec::new())
     }
 
-    async fn analyze_link(&self, source: IpAddr, destination: IpAddr) -> Result<NetworkLink, Box<dyn std::error::Error + Send + Sync>> {
-        let latency = self.measure_latency(source, destination).await?;
-        
-        Ok(NetworkLink {
-            source,
-            destination,
-            interface: None,
-            bandwidth: None,
-            latency_ms: Some(latency),
-            packet_loss: None,
-            link_type: LinkType::Ethernet,
-            last_updated: SystemTime::now(),
-        })
-    }
-
-    async fn measure_latency(&self, _source: IpAddr, _destination: IpAddr) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        // Would measure actual latency between nodes
-        Ok(5) // 5ms latency
-    }
-
-    async fn discover_arp_neighbors(&self) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn discover_arp_neighbors(
+        &self,
+    ) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
         // Would parse ARP table
         Ok(Vec::new())
     }
 
-    async fn discover_lldp_neighbors(&self) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn discover_lldp_neighbors(
+        &self,
+    ) -> Result<Vec<NetworkNode>, Box<dyn std::error::Error + Send + Sync>> {
         // Would use LLDP protocol
         Ok(Vec::new())
     }
 
-    async fn analyze_subnet(&self, subnet: &ipnet::Ipv4Net) -> Result<SubnetInfo, Box<dyn std::error::Error + Send + Sync>> {
+    async fn analyze_subnet(
+        &self,
+        subnet: &ipnet::Ipv4Net,
+    ) -> Result<SubnetInfo, Box<dyn std::error::Error + Send + Sync>> {
         Ok(SubnetInfo {
             network: ipnet::IpNet::V4(*subnet),
-            gateway: Some(IpAddr::V4(subnet.network() + 1)),
-            dns_servers: vec![IpAddr::V4("8.8.8.8".parse().unwrap())],
-            dhcp_server: Some(IpAddr::V4(subnet.network() + 1)),
-            active_hosts: 10,
+            gateway: None,
+            dns_servers: Vec::new(),
+            dhcp_server: None,
+            active_hosts: 0,
             total_hosts: subnet.hosts().count() as u32,
         })
     }
@@ -404,7 +379,7 @@ impl NetworkDiscovery {
     async fn cleanup_expired_nodes(&self, nodes: &mut HashMap<IpAddr, NetworkNode>) {
         let timeout = Duration::from_secs(self.config.neighbor_timeout);
         let now = SystemTime::now();
-        
+
         nodes.retain(|ip, node| {
             if let Ok(elapsed) = now.duration_since(node.last_seen) {
                 if elapsed > timeout {
@@ -430,11 +405,11 @@ impl NetworkDiscovery {
 
     pub async fn find_path(&self, source: IpAddr, destination: IpAddr) -> Option<Vec<IpAddr>> {
         let topology = self.topology.read().await;
-        
+
         // Simple pathfinding algorithm (would use Dijkstra or similar in practice)
         let mut visited = HashSet::new();
         let mut path = Vec::new();
-        
+
         if self.dfs_path_find(&topology, source, destination, &mut visited, &mut path) {
             Some(path)
         } else {
@@ -483,16 +458,17 @@ impl NetworkDiscovery {
 
     pub async fn get_network_statistics(&self) -> NetworkStatistics {
         let topology = self.topology.read().await;
-        
+
         let total_nodes = topology.nodes.len();
-        let router_count = topology.nodes.values()
-            .filter(|n| n.is_router)
-            .count();
+        let router_count = topology.nodes.values().filter(|n| n.is_router).count();
         let host_count = total_nodes - router_count;
         let total_links = topology.links.len();
-        let avg_latency = topology.links.iter()
+        let avg_latency = topology
+            .links
+            .iter()
             .filter_map(|l| l.latency_ms)
-            .sum::<u64>() as f64 / topology.links.len().max(1) as f64;
+            .sum::<u64>() as f64
+            / topology.links.len().max(1) as f64;
 
         NetworkStatistics {
             total_nodes,
@@ -528,7 +504,7 @@ mod tests {
         let config = DiscoveryConfig::default();
         let interfaces = vec![IpAddr::V4("192.168.1.1".parse().unwrap())];
         let discovery = NetworkDiscovery::new(config, interfaces);
-        
+
         let topology = discovery.get_topology().await;
         assert_eq!(topology.nodes.len(), 0);
     }
@@ -544,10 +520,10 @@ mod tests {
         let config = DiscoveryConfig::default();
         let interfaces = vec![IpAddr::V4("192.168.1.1".parse().unwrap())];
         let discovery = NetworkDiscovery::new(config, interfaces);
-        
+
         let source = IpAddr::V4("192.168.1.1".parse().unwrap());
         let destination = IpAddr::V4("192.168.1.2".parse().unwrap());
-        
+
         // With empty topology, should return None
         let path = discovery.find_path(source, destination).await;
         assert!(path.is_none());

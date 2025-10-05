@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustRoute - Configuration</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+</head>
+<body>
+    <div class="container">
+        <nav class="navbar">
+            <div class="nav-brand">
+                <i class="fas fa-route"></i>
+                <span>RustRoute</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="/dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+                <li><a href="/routes"><i class="fas fa-map-signs"></i> Routes</a></li>
+                <li><a href="/config" class="active"><i class="fas fa-cog"></i> Config</a></li>
+                <li><a href="/metrics"><i class="fas fa-chart-line"></i> Metrics</a></li>
+            </ul>
+            <button id="logout-button" class="logout-button hidden">
+                <i class="fas fa-sign-out-alt"></i>
+                Logout
+            </button>
+        </nav>
+
+        <main class="main-content">
+            <header class="page-header">
+                <h1><i class="fas fa-cog"></i> Router Configuration</h1>
+                <button id="reload-config" class="btn btn-primary">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </header>
+
+            <section class="card">
+                <h2>Active Configuration</h2>
+                <p>Configuration data is loaded dynamically from <code>/api/config</code>.</p>
+                <pre id="config-json">Loading configuration...</pre>
+            </section>
+
+            <section class="card">
+                <h2>Configuration History</h2>
+                <p>Select a snapshot to inspect changes or rollback.</p>
+                <ul id="config-history" class="history-list">
+                    <li>Loading history...</li>
+                </ul>
+            </section>
+
+            <section class="card">
+                <h2>Diff Viewer</h2>
+                <div class="diff-grid">
+                    <div>
+                        <h3>Snapshot Version</h3>
+                        <pre id="config-diff-previous">Select a version to view diff.</pre>
+                    </div>
+                    <div>
+                        <h3>Current Configuration</h3>
+                        <pre id="config-diff-current">Select a version to view diff.</pre>
+                    </div>
+                </div>
+                <button id="rollback-button" class="btn btn-danger" disabled>
+                    <i class="fas fa-undo"></i> Rollback to selected version
+                </button>
+            </section>
+
+            <div id="config-message" class="alert hidden"></div>
+        </main>
+    </div>
+
+    <div id="login-modal" class="auth-modal hidden">
+        <div class="auth-modal__content">
+            <h2><i class="fas fa-lock"></i> 登录</h2>
+            <form id="login-form">
+                <label for="auth-username">Username</label>
+                <input id="auth-username" name="username" type="text" required autofocus>
+
+                <label for="auth-password">Password</label>
+                <input id="auth-password" name="password" type="password" required>
+
+                <button type="submit" class="auth-button">Login</button>
+                <div id="login-error" class="auth-error hidden"></div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/config.js" defer></script>
+</body>
+</html>

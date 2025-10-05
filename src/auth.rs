@@ -1,8 +1,8 @@
+use bcrypt::{hash, verify, DEFAULT_COST};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use serde::{Deserialize, Serialize};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use bcrypt::{hash, verify, DEFAULT_COST};
 use uuid::Uuid;
 
 /// Authentication configuration
@@ -53,7 +53,10 @@ pub enum UserRole {
 
 impl UserRole {
     pub fn can_read(&self) -> bool {
-        matches!(self, UserRole::Admin | UserRole::Operator | UserRole::ReadOnly)
+        matches!(
+            self,
+            UserRole::Admin | UserRole::Operator | UserRole::ReadOnly
+        )
     }
 
     pub fn can_write(&self) -> bool {
@@ -68,15 +71,15 @@ impl UserRole {
 /// JWT Claims structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String,         // Subject (username)
-    pub role: UserRole,      // User role
-    pub exp: usize,          // Expiration time
-    pub iat: usize,          // Issued at
-    pub jti: String,         // JWT ID
+    pub sub: String,    // Subject (username)
+    pub role: UserRole, // User role
+    pub exp: usize,     // Expiration time
+    pub iat: usize,     // Issued at
+    pub jti: String,    // JWT ID
 }
 
 /// Login request
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
@@ -204,28 +207,29 @@ impl AuthManager {
         // Verify password
         match verify(&request.password, &user.password_hash) {
             Ok(true) => {
-                // Reset failed attempts on successful login
-                user.failed_attempts = 0;
-                user.last_login = Some(SystemTime::now());
+                let (username, role, last_login) = {
+                    user.failed_attempts = 0;
+                    user.last_login = Some(SystemTime::now());
+                    (user.username.clone(), user.role.clone(), user.last_login)
+                };
 
-                // Generate JWT token
-                match self.generate_token(&user.username, &user.role) {
+                match self.generate_token(&username, &role) {
                     Ok(token) => {
-                        log::info!("Successful login for user: {}", user.username);
+                        log::info!("Successful login for user: {}", username);
                         LoginResponse {
                             success: true,
                             token: Some(token),
                             expires_in: Some(self.config.token_expiry_hours * 3600),
                             user: Some(UserInfo {
-                                username: user.username.clone(),
-                                role: user.role.clone(),
-                                last_login: user.last_login,
+                                username,
+                                role,
+                                last_login,
                             }),
                             message: "Login successful".to_string(),
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to generate token for {}: {}", user.username, e);
+                        log::error!("Failed to generate token: {}", e);
                         LoginResponse {
                             success: false,
                             token: None,
@@ -239,17 +243,22 @@ impl AuthManager {
             Ok(false) | Err(_) => {
                 // Increment failed attempts
                 user.failed_attempts += 1;
-                log::warn!("Failed login attempt for user: {} (attempt {})", 
-                          request.username, user.failed_attempts);
+                log::warn!(
+                    "Failed login attempt for user: {} (attempt {})",
+                    request.username,
+                    user.failed_attempts
+                );
 
                 // Lock account if too many failed attempts
                 if user.failed_attempts >= self.config.max_failed_attempts {
                     let lockout_duration = std::time::Duration::from_secs(
-                        self.config.lockout_duration_minutes as u64 * 60
+                        self.config.lockout_duration_minutes as u64 * 60,
                     );
                     user.locked_until = Some(SystemTime::now() + lockout_duration);
-                    log::warn!("Account locked for user: {} due to too many failed attempts", 
-                              request.username);
+                    log::warn!(
+                        "Account locked for user: {} due to too many failed attempts",
+                        request.username
+                    );
                 }
 
                 LoginResponse {
@@ -263,7 +272,11 @@ impl AuthManager {
         }
     }
 
-    fn generate_token(&mut self, username: &str, role: &UserRole) -> Result<String, jsonwebtoken::errors::Error> {
+    fn generate_token(
+        &mut self,
+        username: &str,
+        role: &UserRole,
+    ) -> Result<String, jsonwebtoken::errors::Error> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -281,10 +294,10 @@ impl AuthManager {
         };
 
         let token = encode(&Header::default(), &claims, &self.encoding_key)?;
-        
+
         // Store active token
         self.active_tokens.insert(jti, claims);
-        
+
         Ok(token)
     }
 
@@ -299,7 +312,7 @@ impl AuthManager {
         match decode::<Claims>(token, &self.decoding_key, &validation) {
             Ok(token_data) => {
                 let claims = token_data.claims;
-                
+
                 // Check if token is in active tokens list
                 if !self.active_tokens.contains_key(&claims.jti) {
                     return Err(AuthError::TokenRevoked);
@@ -363,8 +376,7 @@ impl AuthManager {
         old_password: &str,
         new_password: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let user = self.users.get_mut(username)
-            .ok_or("User not found")?;
+        let user = self.users.get_mut(username).ok_or("User not found")?;
 
         if !verify(old_password, &user.password_hash)? {
             return Err("Invalid current password".into());
@@ -375,15 +387,18 @@ impl AuthManager {
         Ok(())
     }
 
-    pub fn deactivate_user(&mut self, username: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let user = self.users.get_mut(username)
-            .ok_or("User not found")?;
+    pub fn deactivate_user(
+        &mut self,
+        username: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let user = self.users.get_mut(username).ok_or("User not found")?;
 
         user.active = false;
-        
+
         // Revoke all active tokens for this user
-        self.active_tokens.retain(|_, claims| claims.sub != username);
-        
+        self.active_tokens
+            .retain(|_, claims| claims.sub != username);
+
         log::info!("Deactivated user: {}", username);
         Ok(())
     }
@@ -428,28 +443,26 @@ pub enum AuthError {
 
 /// Permission checking middleware
 pub fn require_permission(required_role: UserRole) -> impl Fn(&Claims) -> Result<(), AuthError> {
-    move |claims: &Claims| {
-        match required_role {
-            UserRole::ReadOnly => {
-                if claims.role.can_read() {
-                    Ok(())
-                } else {
-                    Err(AuthError::InsufficientPermissions)
-                }
+    move |claims: &Claims| match required_role {
+        UserRole::ReadOnly => {
+            if claims.role.can_read() {
+                Ok(())
+            } else {
+                Err(AuthError::InsufficientPermissions)
             }
-            UserRole::Operator => {
-                if claims.role.can_write() {
-                    Ok(())
-                } else {
-                    Err(AuthError::InsufficientPermissions)
-                }
+        }
+        UserRole::Operator => {
+            if claims.role.can_write() {
+                Ok(())
+            } else {
+                Err(AuthError::InsufficientPermissions)
             }
-            UserRole::Admin => {
-                if claims.role.can_admin() {
-                    Ok(())
-                } else {
-                    Err(AuthError::InsufficientPermissions)
-                }
+        }
+        UserRole::Admin => {
+            if claims.role.can_admin() {
+                Ok(())
+            } else {
+                Err(AuthError::InsufficientPermissions)
             }
         }
     }
@@ -463,7 +476,7 @@ mod tests {
     async fn test_auth_manager_creation() {
         let config = AuthConfig::default();
         let auth_manager = AuthManager::new(config).unwrap();
-        
+
         // Should have default admin user
         assert_eq!(auth_manager.users.len(), 1);
         assert!(auth_manager.users.contains_key("admin"));
@@ -473,12 +486,12 @@ mod tests {
     async fn test_successful_authentication() {
         let config = AuthConfig::default();
         let mut auth_manager = AuthManager::new(config).unwrap();
-        
+
         let request = LoginRequest {
             username: "admin".to_string(),
             password: "admin123".to_string(),
         };
-        
+
         let response = auth_manager.authenticate(request).await;
         assert!(response.success);
         assert!(response.token.is_some());
@@ -488,12 +501,12 @@ mod tests {
     async fn test_failed_authentication() {
         let config = AuthConfig::default();
         let mut auth_manager = AuthManager::new(config).unwrap();
-        
+
         let request = LoginRequest {
             username: "admin".to_string(),
             password: "wrong_password".to_string(),
         };
-        
+
         let response = auth_manager.authenticate(request).await;
         assert!(!response.success);
         assert!(response.token.is_none());
@@ -504,11 +517,11 @@ mod tests {
         assert!(UserRole::Admin.can_admin());
         assert!(UserRole::Admin.can_write());
         assert!(UserRole::Admin.can_read());
-        
+
         assert!(!UserRole::Operator.can_admin());
         assert!(UserRole::Operator.can_write());
         assert!(UserRole::Operator.can_read());
-        
+
         assert!(!UserRole::ReadOnly.can_admin());
         assert!(!UserRole::ReadOnly.can_write());
         assert!(UserRole::ReadOnly.can_read());
@@ -519,20 +532,20 @@ mod tests {
         let mut config = AuthConfig::default();
         config.max_failed_attempts = 2;
         let mut auth_manager = AuthManager::new(config).unwrap();
-        
+
         let request = LoginRequest {
             username: "admin".to_string(),
             password: "wrong_password".to_string(),
         };
-        
+
         // First failed attempt
         let response1 = auth_manager.authenticate(request.clone()).await;
         assert!(!response1.success);
-        
+
         // Second failed attempt - should lock account
         let response2 = auth_manager.authenticate(request.clone()).await;
         assert!(!response2.success);
-        
+
         // Third attempt should be rejected due to lockout
         let response3 = auth_manager.authenticate(request).await;
         assert!(!response3.success);

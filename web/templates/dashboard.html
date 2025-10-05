@@ -22,6 +22,10 @@
                 <li><a href="/config"><i class="fas fa-cog"></i> Config</a></li>
                 <li><a href="/metrics"><i class="fas fa-chart-line"></i> Metrics</a></li>
             </ul>
+            <button id="logout-button" class="logout-button hidden">
+                <i class="fas fa-sign-out-alt"></i>
+                Logout
+            </button>
         </nav>
 
         <!-- Main Content -->
@@ -93,23 +97,7 @@
             <!-- Recent Activity -->
             <div class="activity-section">
                 <h3><i class="fas fa-history"></i> Recent Activity</h3>
-                <div class="activity-log" id="activity-log">
-                    <div class="activity-item">
-                        <span class="activity-time">10:30:15</span>
-                        <span class="activity-type info">INFO</span>
-                        <span class="activity-message">Route to 192.168.2.0/24 learned from 192.168.1.1</span>
-                    </div>
-                    <div class="activity-item">
-                        <span class="activity-time">10:29:42</span>
-                        <span class="activity-type success">SUCCESS</span>
-                        <span class="activity-message">Interface eth0 is up and running</span>
-                    </div>
-                    <div class="activity-item">
-                        <span class="activity-time">10:28:33</span>
-                        <span class="activity-type warning">WARNING</span>
-                        <span class="activity-message">Route to 10.0.0.0/8 metric increased to 15</span>
-                    </div>
-                </div>
+                <div class="activity-log" id="activity-log"></div>
             </div>
 
             <!-- Interface Status -->
@@ -122,13 +110,29 @@
         </main>
     </div>
 
+    <div id="login-modal" class="auth-modal hidden">
+        <div class="auth-modal__content">
+            <h2><i class="fas fa-lock"></i> 登录</h2>
+            <form id="login-form">
+                <label for="auth-username">Username</label>
+                <input id="auth-username" name="username" type="text" required autofocus>
+
+                <label for="auth-password">Password</label>
+                <input id="auth-password" name="password" type="password" required>
+
+                <button type="submit" class="auth-button">Login</button>
+                <div id="login-error" class="auth-error hidden"></div>
+            </form>
+        </div>
+    </div>
+
     <!-- Scripts -->
+    <script src="/static/js/auth.js"></script>
     <script src="/static/js/dashboard.js"></script>
     <script>
         // Initialize dashboard
         document.addEventListener('DOMContentLoaded', function() {
             initializeDashboard();
-            startRealTimeUpdates();
         });
     </script>
 </body>

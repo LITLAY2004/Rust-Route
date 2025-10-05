@@ -1,15 +1,20 @@
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
-use serde::{Deserialize, Serialize};
-use tokio::sync::{RwLock, watch};
-use notify::{Watcher, RecommendedWatcher, RecursiveMode, Event, EventKind};
-use anyhow::{Result, Context};
-use chrono::{DateTime, Utc};
+use tokio::sync::{watch, RwLock};
+
+use log::warn;
 
 use crate::auth::AuthConfig;
-use crate::web::WebConfig;
 use crate::ipv6::RipV6Config;
+use crate::web::WebConfig;
+
+const DEFAULT_HISTORY_LIMIT: usize = 20;
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,18 +77,37 @@ pub struct BackupConfig {
     pub compress: bool,
 }
 
+#[derive(Debug, Clone)]
+struct ConfigSnapshot {
+    version: u32,
+    timestamp: DateTime<Utc>,
+    config: RouterConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigHistoryEntry {
+    pub version: u32,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigDiff {
+    pub version: u32,
+    pub timestamp: DateTime<Utc>,
+    pub previous: String,
+    pub current: String,
+}
+
 impl Default for RouterConfig {
     fn default() -> Self {
         Self {
             router_id: "192.168.1.1".to_string(),
-            interfaces: vec![
-                InterfaceConfig {
-                    name: "eth0".to_string(),
-                    address: "192.168.1.1/24".to_string(),
-                    enabled: true,
-                    cost: 1,
-                }
-            ],
+            interfaces: vec![InterfaceConfig {
+                name: "eth0".to_string(),
+                address: "192.168.1.1/24".to_string(),
+                enabled: true,
+                cost: 1,
+            }],
             rip: RipConfig {
                 enabled: true,
                 port: 520,
@@ -170,22 +194,34 @@ pub struct ConfigManager {
     current_config: Arc<RwLock<RouterConfig>>,
     config_version: Arc<RwLock<u32>>,
     change_sender: watch::Sender<RouterConfig>,
+    history: Arc<RwLock<VecDeque<ConfigSnapshot>>>,
+    history_limit: usize,
     _watcher: RecommendedWatcher,
 }
 
 impl ConfigManager {
-    pub async fn new(config_path: impl AsRef<Path>) -> Result<(Self, watch::Receiver<RouterConfig>)> {
+    pub async fn new(
+        config_path: impl AsRef<Path>,
+    ) -> Result<(Self, watch::Receiver<RouterConfig>)> {
         let config_path = config_path.as_ref().to_path_buf();
-        
+
         // Load initial configuration
-        let config = Self::load_config(&config_path).await
-            .unwrap_or_else(|_| {
-                log::warn!("Failed to load config, using defaults");
-                RouterConfig::default()
-            });
+        let config = Self::load_config(&config_path).await.unwrap_or_else(|_| {
+            log::warn!("Failed to load config, using defaults");
+            RouterConfig::default()
+        });
 
         let current_config = Arc::new(RwLock::new(config.clone()));
         let config_version = Arc::new(RwLock::new(1));
+        let history = Arc::new(RwLock::new(VecDeque::new()));
+        {
+            let mut history_guard = history.write().await;
+            history_guard.push_back(ConfigSnapshot {
+                version: 1,
+                timestamp: Utc::now(),
+                config: config.clone(),
+            });
+        }
         let (change_sender, change_receiver) = watch::channel(config.clone());
 
         // Setup file watcher for hot-reload
@@ -194,6 +230,8 @@ impl ConfigManager {
             current_config.clone(),
             config_version.clone(),
             change_sender.clone(),
+            history.clone(),
+            DEFAULT_HISTORY_LIMIT,
         )?;
 
         let manager = Self {
@@ -201,6 +239,8 @@ impl ConfigManager {
             current_config,
             config_version,
             change_sender,
+            history,
+            history_limit: DEFAULT_HISTORY_LIMIT,
             _watcher: watcher,
         };
 
@@ -208,11 +248,12 @@ impl ConfigManager {
     }
 
     async fn load_config(path: &Path) -> Result<RouterConfig> {
-        let content = tokio::fs::read_to_string(path).await
+        let content = tokio::fs::read_to_string(path)
+            .await
             .context("Failed to read config file")?;
 
-        let config: RouterConfig = serde_json::from_str(&content)
-            .context("Failed to parse config JSON")?;
+        let config: RouterConfig =
+            serde_json::from_str(&content).context("Failed to parse config JSON")?;
 
         Ok(config)
     }
@@ -222,21 +263,28 @@ impl ConfigManager {
         current_config: Arc<RwLock<RouterConfig>>,
         config_version: Arc<RwLock<u32>>,
         change_sender: watch::Sender<RouterConfig>,
+        history: Arc<RwLock<VecDeque<ConfigSnapshot>>>,
+        history_limit: usize,
     ) -> Result<RecommendedWatcher> {
         let config_path = config_path.to_path_buf();
-        
+
+        let watch_path = config_path.clone();
+        let runtime = tokio::runtime::Handle::current();
+
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             let config_path = config_path.clone();
             let current_config = current_config.clone();
             let config_version = config_version.clone();
             let change_sender = change_sender.clone();
+            let runtime = runtime.clone();
+            let history = history.clone();
 
-            tokio::spawn(async move {
+            runtime.spawn(async move {
                 match res {
                     Ok(event) => {
                         if matches!(event.kind, EventKind::Modify(_)) {
                             log::info!("🔄 Configuration file changed, reloading...");
-                            
+
                             match Self::load_config(&config_path).await {
                                 Ok(new_config) => {
                                     // Validate new configuration
@@ -267,10 +315,18 @@ impl ConfigManager {
                                     }
 
                                     // Notify subscribers
-                                    if let Err(e) = change_sender.send(new_config) {
+                                    if let Err(e) = change_sender.send(new_config.clone()) {
                                         log::error!("Failed to notify config change: {}", e);
                                     } else {
                                         log::info!("✅ Configuration reloaded successfully");
+                                        let current_version = *config_version.read().await;
+                                        Self::record_snapshot(
+                                            &history,
+                                            history_limit,
+                                            current_version,
+                                            new_config,
+                                        )
+                                        .await;
                                     }
                                 }
                                 Err(e) => {
@@ -286,7 +342,7 @@ impl ConfigManager {
             });
         })?;
 
-        watcher.watch(config_path, RecursiveMode::NonRecursive)?;
+        watcher.watch(&watch_path, RecursiveMode::NonRecursive)?;
         Ok(watcher)
     }
 
@@ -298,14 +354,18 @@ impl ConfigManager {
         // Validate configuration
         let validation = Self::validate_config(&new_config);
         if !validation.is_valid() {
-            return Err(anyhow::anyhow!("Configuration validation failed: {:?}", validation.errors));
+            return Err(anyhow::anyhow!(
+                "Configuration validation failed: {:?}",
+                validation.errors
+            ));
         }
 
         // Save to file
-        let json = serde_json::to_string_pretty(&new_config)
-            .context("Failed to serialize config")?;
+        let json =
+            serde_json::to_string_pretty(&new_config).context("Failed to serialize config")?;
 
-        tokio::fs::write(&self.config_path, json).await
+        tokio::fs::write(&self.config_path, json)
+            .await
             .context("Failed to write config file")?;
 
         // Update in-memory config
@@ -321,11 +381,86 @@ impl ConfigManager {
         }
 
         // Notify subscribers
-        self.change_sender.send(new_config)
-            .map_err(|e| anyhow::anyhow!("Failed to notify config change: {}", e))?;
+        if let Err(e) = self.change_sender.send(new_config.clone()) {
+            warn!("Config change notification dropped: {}", e);
+        }
 
         log::info!("✅ Configuration updated successfully");
+
+        let current_version = *self.config_version.read().await;
+        Self::record_snapshot(
+            &self.history,
+            self.history_limit,
+            current_version,
+            new_config,
+        )
+        .await;
         Ok(())
+    }
+
+    pub async fn list_history(&self) -> Vec<ConfigHistoryEntry> {
+        let history = self.history.read().await;
+        history
+            .iter()
+            .rev()
+            .map(|snapshot| ConfigHistoryEntry {
+                version: snapshot.version,
+                timestamp: snapshot.timestamp,
+            })
+            .collect()
+    }
+
+    pub async fn diff(&self, version: u32) -> Result<ConfigDiff> {
+        let snapshot = {
+            let history = self.history.read().await;
+            history
+                .iter()
+                .find(|entry| entry.version == version)
+                .cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("Snapshot not found"))?;
+
+        let current = self.get_config().await;
+
+        Ok(ConfigDiff {
+            version: snapshot.version,
+            timestamp: snapshot.timestamp,
+            previous: serde_json::to_string_pretty(&snapshot.config)
+                .context("Failed to serialize snapshot config")?,
+            current: serde_json::to_string_pretty(&current)
+                .context("Failed to serialize current config")?,
+        })
+    }
+
+    pub async fn rollback_to(&self, version: u32) -> Result<()> {
+        let snapshot = {
+            let history = self.history.read().await;
+            history
+                .iter()
+                .find(|entry| entry.version == version)
+                .cloned()
+        }
+        .ok_or_else(|| anyhow::anyhow!("Snapshot not found"))?;
+
+        self.update_config(snapshot.config).await
+    }
+
+    async fn record_snapshot(
+        history: &Arc<RwLock<VecDeque<ConfigSnapshot>>>,
+        limit: usize,
+        version: u32,
+        config: RouterConfig,
+    ) {
+        let mut guard = history.write().await;
+        guard.retain(|snapshot| snapshot.version != version);
+        guard.push_back(ConfigSnapshot {
+            version,
+            timestamp: Utc::now(),
+            config,
+        });
+        while guard.len() > limit {
+            guard.pop_front();
+        }
     }
 
     pub fn validate_config(config: &RouterConfig) -> ValidationResult {
@@ -353,7 +488,10 @@ impl ConfigManager {
             }
 
             if interface.cost == 0 {
-                result.add_warning(format!("Interface {} has cost 0, which may cause issues", interface.name));
+                result.add_warning(format!(
+                    "Interface {} has cost 0, which may cause issues",
+                    interface.name
+                ));
             }
         }
 
@@ -398,6 +536,13 @@ impl ConfigManager {
             }
         }
 
+        if config.web.auth_enabled != config.auth.enabled {
+            result.add_warning(
+                "web.auth_enabled and auth.enabled differ; authentication only activates when both are true"
+                    .to_string(),
+            );
+        }
+
         // Validate logging
         if config.logging.level.is_empty() {
             result.add_error("Log level cannot be empty".to_string());
@@ -415,7 +560,9 @@ impl ConfigManager {
             }
 
             if config.backup.max_backups == 0 {
-                result.add_warning("Max backups is 0, backups will be deleted immediately".to_string());
+                result.add_warning(
+                    "Max backups is 0, backups will be deleted immediately".to_string(),
+                );
             }
         }
 
@@ -424,27 +571,29 @@ impl ConfigManager {
 
     pub async fn create_backup(&self, description: String) -> Result<PathBuf> {
         let config = self.get_config().await;
-        
+
         if !config.backup.enabled {
             return Err(anyhow::anyhow!("Backup is disabled"));
         }
 
         let backup_dir = Path::new(&config.backup.backup_directory);
-        tokio::fs::create_dir_all(backup_dir).await
+        tokio::fs::create_dir_all(backup_dir)
+            .await
             .context("Failed to create backup directory")?;
 
         let timestamp = Utc::now();
-        let backup_filename = format!("rust-route-backup-{}.json", 
-                                    timestamp.format("%Y%m%d-%H%M%S"));
+        let backup_filename = format!(
+            "rust-route-backup-{}.json",
+            timestamp.format("%Y%m%d-%H%M%S")
+        );
         let backup_path = backup_dir.join(&backup_filename);
 
         // Create backup content
-        let backup_content = if config.backup.include_routing_table {
-            // In a real implementation, we'd include the routing table
-            serde_json::to_string_pretty(&config)?
-        } else {
-            serde_json::to_string_pretty(&config)?
-        };
+        let backup_content = serde_json::to_string_pretty(&config)?;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        backup_content.hash(&mut hasher);
+        let checksum_hex = format!("{:x}", hasher.finish());
 
         // Write backup file
         if config.backup.compress {
@@ -459,7 +608,7 @@ impl ConfigManager {
             timestamp,
             version: env!("CARGO_PKG_VERSION").to_string(),
             size_bytes: backup_content.len() as u64,
-            checksum: format!("{:x}", md5::compute(backup_content.as_bytes())),
+            checksum: checksum_hex,
             description,
             config_version: *self.config_version.read().await,
         };
@@ -477,27 +626,34 @@ impl ConfigManager {
 
     pub async fn restore_backup(&self, backup_path: impl AsRef<Path>) -> Result<()> {
         let backup_path = backup_path.as_ref();
-        
+
         if !backup_path.exists() {
             return Err(anyhow::anyhow!("Backup file does not exist"));
         }
 
-        let content = tokio::fs::read_to_string(backup_path).await
+        let content = tokio::fs::read_to_string(backup_path)
+            .await
             .context("Failed to read backup file")?;
 
-        let config: RouterConfig = serde_json::from_str(&content)
-            .context("Failed to parse backup configuration")?;
+        let config: RouterConfig =
+            serde_json::from_str(&content).context("Failed to parse backup configuration")?;
 
         // Validate the restored configuration
         let validation = Self::validate_config(&config);
         if !validation.is_valid() {
-            return Err(anyhow::anyhow!("Backup contains invalid configuration: {:?}", validation.errors));
+            return Err(anyhow::anyhow!(
+                "Backup contains invalid configuration: {:?}",
+                validation.errors
+            ));
         }
 
         // Apply the configuration
         self.update_config(config).await?;
 
-        log::info!("✅ Configuration restored from backup: {}", backup_path.display());
+        log::info!(
+            "✅ Configuration restored from backup: {}",
+            backup_path.display()
+        );
         Ok(())
     }
 
@@ -517,7 +673,8 @@ impl ConfigManager {
             if let Some(extension) = path.extension() {
                 if extension == "meta" {
                     let metadata_content = tokio::fs::read_to_string(&path).await?;
-                    if let Ok(metadata) = serde_json::from_str::<BackupMetadata>(&metadata_content) {
+                    if let Ok(metadata) = serde_json::from_str::<BackupMetadata>(&metadata_content)
+                    {
                         let backup_path = path.with_extension("json");
                         if backup_path.exists() {
                             backups.push((backup_path, metadata));
@@ -535,10 +692,10 @@ impl ConfigManager {
 
     async fn cleanup_old_backups(&self, backup_config: &BackupConfig) -> Result<()> {
         let backups = self.list_backups().await?;
-        
+
         if backups.len() > backup_config.max_backups as usize {
             let to_delete = &backups[backup_config.max_backups as usize..];
-            
+
             for (backup_path, _) in to_delete {
                 tokio::fs::remove_file(backup_path).await?;
                 let meta_path = backup_path.with_extension("meta");
@@ -574,7 +731,7 @@ mod tests {
         let mut config = RouterConfig::default();
         config.router_id = "".to_string();
         config.interfaces.clear();
-        
+
         let result = ConfigManager::validate_config(&config);
         assert!(!result.is_valid());
         assert!(result.errors.len() >= 2);
@@ -596,7 +753,10 @@ mod tests {
         let (manager, _) = ConfigManager::new(&config_path).await.unwrap();
 
         // Create backup
-        let backup_path = manager.create_backup("Test backup".to_string()).await.unwrap();
+        let backup_path = manager
+            .create_backup("Test backup".to_string())
+            .await
+            .unwrap();
         assert!(backup_path.exists());
 
         // Modify config

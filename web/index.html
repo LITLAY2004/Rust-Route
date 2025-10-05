@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🦀 RustRoute - 网络路由器管理界面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 600px;
+            margin: 20px;
+        }
+        
+        .logo {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+        
+        .nav-links {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .nav-link {
+            display: inline-block;
+            padding: 15px 30px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            text-decoration: none;
+            border-radius: 10px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            font-weight: 600;
+        }
+        
+        .nav-link:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        
+        .feature {
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .feature h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .feature p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">🦀</div>
+        <h1>RustRoute</h1>
+        <p class="subtitle">实验性 RIP 路由器原型</p>
+        <div class="status">🟢 Web 服务器运行中</div>
+        
+        <div class="nav-links">
+            <a href="templates/dashboard.html" class="nav-link">
+                📊 管理仪表板
+            </a>
+            <a href="templates/routes.html" class="nav-link">
+                🛣️ 路由表管理
+            </a>
+        </div>
+        
+        <div class="features">
+            <div class="feature">
+                <h3>🛠️ 功能原型</h3>
+                <p>当前页面为设计稿示意，实际后端尚处于开发阶段</p>
+            </div>
+            <div class="feature">
+                <h3>🌐 RIP 学习</h3>
+                <p>专注于在本地环境中实验 RIP 报文、路由表与配置热重载</p>
+            </div>
+            <div class="feature">
+                <h3>📈 计划中</h3>
+                <p>实时监控、用户认证与权限控制列入后续迭代</p>
+            </div>
+            <div class="feature">
+                <h3>🤝 欢迎贡献</h3>
+                <p>查看仓库文档了解差异与任务拆解，参与共建</p>
+            </div>
+        </div>
+        
+        <div style="margin-top: 30px; color: #666; font-size: 0.9rem;">
+            <p>🔧 当前版本: v0.2.x（原型）</p>
+            <p>📅 页面最后更新：2024 年 9 月</p>
+        </div>
+    </div>
+</body>
+</html>

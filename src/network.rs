@@ -25,7 +25,7 @@ impl Default for InterfaceConfig {
             ip_address: Ipv4Addr::new(192, 168, 1, 1),
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             multicast_address: Ipv4Addr::new(224, 0, 0, 9), // RIP multicast address
-            port: 520, // Standard RIP port
+            port: 520,                                      // Standard RIP port
             mtu: 1500,
             enabled: true,
         }
@@ -50,10 +50,7 @@ impl NetworkInterface {
 
     /// Initialize the network interface
     pub async fn initialize(&mut self) -> RustRouteResult<()> {
-        let bind_addr = SocketAddr::new(
-            IpAddr::V4(self.config.ip_address),
-            self.config.port,
-        );
+        let bind_addr = SocketAddr::new(IpAddr::V4(self.config.ip_address), self.config.port);
 
         let socket = TokioUdpSocket::bind(bind_addr)
             .await
@@ -65,7 +62,7 @@ impl NetworkInterface {
             .map_err(|e| RustRouteError::NetworkError(format!("Failed to set broadcast: {}", e)))?;
 
         self.socket = Some(socket);
-        
+
         log::info!(
             "Network interface {} initialized on {}:{}",
             self.config.name,
@@ -78,63 +75,92 @@ impl NetworkInterface {
 
     /// Send a RIPER packet
     pub async fn send_packet(&self, packet: &RipPacket) -> RustRouteResult<()> {
-        let socket = self.socket.as_ref()
+        let socket = self
+            .socket
+            .as_ref()
             .ok_or_else(|| RustRouteError::NetworkError("Interface not initialized".to_string()))?;
 
         // Serialize packet to JSON
-        let json_data = packet.to_json()
-            .map_err(|e| RustRouteError::ProtocolError(format!("Failed to serialize packet: {}", e)))?;
+        let json_data = packet.to_json().map_err(|e| {
+            RustRouteError::ProtocolError(format!("Failed to serialize packet: {}", e))
+        })?;
 
         // Send to broadcast address
         let broadcast_addr = self.get_broadcast_address();
         let target = SocketAddr::new(IpAddr::V4(broadcast_addr), self.config.port);
 
-        socket.send_to(json_data.as_bytes(), target)
+        socket
+            .send_to(json_data.as_bytes(), target)
             .await
             .map_err(|e| RustRouteError::NetworkError(format!("Failed to send packet: {}", e)))?;
 
-        log::debug!("Sent packet to {} on interface {}", target, self.config.name);
+        log::debug!(
+            "Sent packet to {} on interface {}",
+            target,
+            self.config.name
+        );
         Ok(())
     }
 
     /// Send a packet to a specific destination
-    pub async fn send_packet_to(&self, packet: &RipPacket, destination: SocketAddr) -> RustRouteResult<()> {
-        let socket = self.socket.as_ref()
+    pub async fn send_packet_to(
+        &self,
+        packet: &RipPacket,
+        destination: SocketAddr,
+    ) -> RustRouteResult<()> {
+        let socket = self
+            .socket
+            .as_ref()
             .ok_or_else(|| RustRouteError::NetworkError("Interface not initialized".to_string()))?;
 
-        let json_data = packet.to_json()
-            .map_err(|e| RustRouteError::ProtocolError(format!("Failed to serialize packet: {}", e)))?;
+        let json_data = packet.to_json().map_err(|e| {
+            RustRouteError::ProtocolError(format!("Failed to serialize packet: {}", e))
+        })?;
 
-        socket.send_to(json_data.as_bytes(), destination)
+        socket
+            .send_to(json_data.as_bytes(), destination)
             .await
             .map_err(|e| RustRouteError::NetworkError(format!("Failed to send packet: {}", e)))?;
 
-        log::debug!("Sent packet to {} on interface {}", destination, self.config.name);
+        log::debug!(
+            "Sent packet to {} on interface {}",
+            destination,
+            self.config.name
+        );
         Ok(())
     }
 
     /// Receive a RIPER packet
     pub async fn receive_packet(&self) -> RustRouteResult<(RipPacket, SocketAddr)> {
-        let socket = self.socket.as_ref()
+        let socket = self
+            .socket
+            .as_ref()
             .ok_or_else(|| RustRouteError::NetworkError("Interface not initialized".to_string()))?;
 
         let mut buffer = vec![0u8; self.config.mtu as usize];
-        let (bytes_received, sender_addr) = socket.recv_from(&mut buffer)
-            .await
-            .map_err(|e| RustRouteError::NetworkError(format!("Failed to receive packet: {}", e)))?;
+        let (bytes_received, sender_addr) = socket.recv_from(&mut buffer).await.map_err(|e| {
+            RustRouteError::NetworkError(format!("Failed to receive packet: {}", e))
+        })?;
 
         buffer.truncate(bytes_received);
-        let json_str = String::from_utf8(buffer)
-            .map_err(|e| RustRouteError::ProtocolError(format!("Invalid UTF-8 in packet: {}", e)))?;
+        let json_str = String::from_utf8(buffer).map_err(|e| {
+            RustRouteError::ProtocolError(format!("Invalid UTF-8 in packet: {}", e))
+        })?;
 
-        let packet = RipPacket::from_json(&json_str)
-            .map_err(|e| RustRouteError::ProtocolError(format!("Failed to deserialize packet: {}", e)))?;
+        let packet = RipPacket::from_json(&json_str).map_err(|e| {
+            RustRouteError::ProtocolError(format!("Failed to deserialize packet: {}", e))
+        })?;
 
         // Validate packet
-        packet.validate()
+        packet
+            .validate()
             .map_err(|e| RustRouteError::ProtocolError(format!("Invalid packet: {}", e)))?;
 
-        log::debug!("Received packet from {} on interface {}", sender_addr, self.config.name);
+        log::debug!(
+            "Received packet from {} on interface {}",
+            sender_addr,
+            self.config.name
+        );
         Ok((packet, sender_addr))
     }
 
@@ -160,7 +186,7 @@ impl NetworkInterface {
         let ip = u32::from(self.config.ip_address);
         let mask = u32::from(self.config.subnet_mask);
         let addr_u32 = u32::from(addr);
-        
+
         (ip & mask) == (addr_u32 & mask)
     }
 
@@ -209,8 +235,12 @@ impl NetworkManager {
     /// Initialize all interfaces
     pub async fn initialize_all(&mut self) -> RustRouteResult<()> {
         for (name, interface) in &mut self.interfaces {
-            interface.initialize().await
-                .map_err(|e| RustRouteError::NetworkError(format!("Failed to initialize interface {}: {}", name, e)))?;
+            interface.initialize().await.map_err(|e| {
+                RustRouteError::NetworkError(format!(
+                    "Failed to initialize interface {}: {}",
+                    name, e
+                ))
+            })?;
         }
         Ok(())
     }
@@ -242,7 +272,10 @@ impl NetworkManager {
 
     /// Get statistics for all interfaces
     pub fn get_all_stats(&self) -> Vec<InterfaceStats> {
-        self.interfaces.values().map(|iface| iface.get_stats()).collect()
+        self.interfaces
+            .values()
+            .map(|iface| iface.get_stats())
+            .collect()
     }
 }
 
@@ -278,15 +311,15 @@ pub mod utils {
         let ip1_u32 = u32::from(ip1);
         let ip2_u32 = u32::from(ip2);
         let mask_u32 = u32::from(mask);
-        
+
         (ip1_u32 & mask_u32) == (ip2_u32 & mask_u32)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::utils::*;
+    use super::*;
 
     #[test]
     fn test_broadcast_address() {
@@ -295,10 +328,10 @@ mod tests {
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             ..Default::default()
         };
-        
+
         let interface = NetworkInterface::new(config);
         let broadcast = interface.get_broadcast_address();
-        
+
         assert_eq!(broadcast, Ipv4Addr::new(192, 168, 1, 255));
     }
 
@@ -309,9 +342,9 @@ mod tests {
             subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             ..Default::default()
         };
-        
+
         let interface = NetworkInterface::new(config);
-        
+
         assert!(interface.is_in_subnet(Ipv4Addr::new(192, 168, 1, 20)));
         assert!(!interface.is_in_subnet(Ipv4Addr::new(192, 168, 2, 20)));
     }

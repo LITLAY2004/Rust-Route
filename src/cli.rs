@@ -72,6 +72,7 @@ pub struct CliFormatter;
 impl CliFormatter {
     /// Print the application banner
     pub fn print_banner() {
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         println!();
         println!("🦀 ████████████████████████████████████████████████████████████");
         println!("🦀 ██                                                        ██");
@@ -82,7 +83,7 @@ impl CliFormatter {
         println!("🦀 ██ |_| \\_\\\\__,_|___/\\__|_| \\_\\___/ \\__,_|\\__\\___|       ██");
         println!("🦀 ██                                                        ██");
         println!("🦀 ██               RIP Router Implementation               ██");
-        println!("🦀 ██                     v0.1.0                           ██");
+        println!("🦀 ██{:^58}██", version);
         println!("🦀 ██                                                        ██");
         println!("🦀 ████████████████████████████████████████████████████████████");
         println!();
@@ -109,7 +110,7 @@ impl CliFormatter {
     }
 
     /// Show a progress bar
-    pub fn show_progress(message: &str, duration: Duration) -> ProgressBar {
+    pub fn show_progress(message: &str, _duration: Duration) -> ProgressBar {
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::default_bar()

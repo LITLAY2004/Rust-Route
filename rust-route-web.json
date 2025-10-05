@@ -1,9 +1,15 @@
 {
-  "router_id": "192.168.1.1",
+  "router_id": "10.10.10.1",
   "interfaces": [
     {
       "name": "eth0",
-      "address": "192.168.1.1/24",
+      "address": "10.10.10.1/24",
+      "enabled": true,
+      "cost": 1
+    },
+    {
+      "name": "eth1",
+      "address": "172.16.0.1/24",
       "enabled": true,
       "cost": 1
     }
@@ -15,7 +21,7 @@
     "garbage_collection_timeout": 120,
     "infinity_metric": 16,
     "split_horizon": true,
-    "poison_reverse": false
+    "poison_reverse": true
   },
   "ripv6": {
     "enabled": false,
@@ -28,42 +34,42 @@
   "web": {
     "enabled": true,
     "bind_address": "0.0.0.0",
-    "port": 8080,
-    "auth_enabled": false,
+    "port": 8443,
+    "auth_enabled": true,
     "admin_username": "admin",
     "admin_password_hash": "$2b$12$dummy.hash.for.default.config",
     "static_dir": "web/static"
   },
   "auth": {
-    "enabled": false,
-    "jwt_secret": "replace-this-with-a-secure-random-secret-value",
-    "token_expiry_hours": 24,
+    "enabled": true,
+    "jwt_secret": "generate-a-secure-64-character-secret-value-here",
+    "token_expiry_hours": 12,
     "max_failed_attempts": 5,
     "lockout_duration_minutes": 30,
-    "require_https": false,
+    "require_https": true,
     "allowed_origins": [
-      "http://127.0.0.1:8080",
-      "http://localhost:8080"
+      "https://rustroute.local",
+      "http://localhost:8443"
     ]
   },
   "logging": {
     "level": "info",
-    "file_path": "/var/log/rust-route.log",
+    "file_path": null,
     "max_file_size": 10485760,
     "max_files": 5,
     "console_output": true
   },
   "metrics": {
     "enabled": true,
-    "collection_interval": 60,
-    "retention_days": 7,
-    "export_prometheus": false,
-    "prometheus_port": 9090
+    "collection_interval": 30,
+    "retention_days": 14,
+    "export_prometheus": true,
+    "prometheus_port": 9797
   },
   "backup": {
     "enabled": true,
-    "interval_hours": 24,
-    "max_backups": 7,
+    "interval_hours": 6,
+    "max_backups": 12,
     "backup_directory": "/var/backups/rust-route",
     "include_routing_table": true,
     "compress": true

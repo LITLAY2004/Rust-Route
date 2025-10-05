@@ -1,20 +1,21 @@
 //! RustRoute: Simple RIP Implementation in Rust
-//! 
+//!
 //! This library implements a simple and practical RIP routing protocol
 //! focused on core functionality and ease of use.
 
-pub mod router;
-pub mod network;
-pub mod protocol;
-pub mod routing_table;
-pub mod metrics;
+pub mod auth;
 pub mod cli;
+pub mod config_manager;
+pub mod events;
+pub mod ipv6;
+pub mod metrics;
+pub mod network;
+pub mod network_discovery;
+pub mod protocol;
+pub mod router;
+pub mod routing_table;
 pub mod testing;
 pub mod web;
-pub mod auth;
-pub mod ipv6;
-pub mod config_manager;
-pub mod network_discovery;
 
 use std::error::Error;
 use std::fmt;

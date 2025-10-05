@@ -941,6 +941,9 @@ name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "is-terminal"
@@ -1511,6 +1514,7 @@ name = "rust-route"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "axum",
  "bcrypt",
  "chrono",
@@ -1520,6 +1524,7 @@ dependencies = [
  "console",
  "criterion",
  "env_logger",
+ "futures-core",
  "hyper",
  "indicatif",
  "ipnet",
@@ -1530,8 +1535,10 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tokio-test",
  "tower 0.4.13",
  "tower-http",
@@ -1870,6 +1877,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

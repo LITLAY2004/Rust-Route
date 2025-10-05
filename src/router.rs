@@ -1,429 +1,371 @@
 //! Router implementation for RustRoute
 
-use crate::routing_table::RoutingTable;
-use crate::network::NetworkInterface;
+use crate::config_manager::{InterfaceConfig, RipConfig, RouterConfig};
+use crate::metrics::Metrics;
+use crate::network::{InterfaceConfig as NetInterfaceConfig, NetworkInterface};
 use crate::protocol::RipPacket;
-use crate::metrics::MetricsCollector;
+use crate::routing_table::{Route, RouteSource, RoutingTable, RoutingTableStatistics};
 use crate::{RustRouteError, RustRouteResult};
+use ipnet::{IpNet, Ipv4Net};
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, mpsc};
-use tokio::net::UdpSocket;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Router configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RouterConfig {
-    pub router_id: Uuid,
-    pub port: u16,
-    pub rip_version: u8,
-    pub interfaces: Vec<InterfaceConfig>,
-    pub update_interval: u64,          // seconds
-    pub holddown_timer: u64,           // seconds
-    pub garbage_collection_timer: u64, // seconds
-    pub max_hop_count: u8,
-    pub split_horizon: bool,
-    pub poison_reverse: bool,
+#[derive(Debug, Clone)]
+pub struct NeighborInfo {
+    pub address: IpAddr,
+    pub interface: Option<String>,
+    pub last_seen: Instant,
+    pub learned_routes: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterfaceConfig {
-    pub name: String,
-    pub ip_address: Ipv4Addr,
-    pub subnet_mask: Ipv4Addr,
-    pub enabled: bool,
-}
-
-impl Default for InterfaceConfig {
-    fn default() -> Self {
-        Self {
-            name: "eth0".to_string(),
-            ip_address: Ipv4Addr::new(192, 168, 1, 1),
-            subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
-            enabled: true,
-        }
-    }
-}
-
-impl Default for RouterConfig {
-    fn default() -> Self {
-        Self {
-            router_id: Uuid::new_v4(),
-            port: 520,
-            rip_version: 2,
-            interfaces: vec![
-                InterfaceConfig {
-                    name: "eth0".to_string(),
-                    ip_address: Ipv4Addr::new(192, 168, 1, 1),
-                    subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
-                    enabled: true,
-                }
-            ],
-            update_interval: 30,
-            holddown_timer: 180,
-            garbage_collection_timer: 240,
-            max_hop_count: 15,
-            split_horizon: true,
-            poison_reverse: false,
-        }
-    }
-}
-
-/// RustRoute Router implementation with real networking
+/// Router runtime responsible for managing configuration, routing table and metrics
 #[derive(Debug)]
 pub struct Router {
-    pub config: RouterConfig,
-    pub routing_table: Arc<RwLock<RoutingTable>>,
-    pub interfaces: HashMap<String, NetworkInterface>,
-    pub neighbors: Arc<RwLock<HashMap<IpAddr, RouterInfo>>>,
-    pub metrics: Arc<MetricsCollector>,
-    pub sockets: HashMap<String, Arc<UdpSocket>>,
-    pub shutdown_sender: Option<mpsc::Sender<()>>,
-    running: bool,
+    config: RouterConfig,
+    routing_table: Arc<RwLock<RoutingTable>>,
+    metrics: Metrics,
+    neighbors: Arc<RwLock<HashMap<IpAddr, NeighborInfo>>>,
     start_time: Instant,
-}
-
-/// Information about neighboring routers
-#[derive(Debug, Clone)]
-pub struct RouterInfo {
-    pub router_id: Uuid,
-    pub last_seen: Instant,
-    pub interface: String,
-    pub routes_count: usize,
+    router_uuid: Uuid,
+    interfaces: HashMap<String, Arc<NetworkInterface>>,
 }
 
 impl Router {
-    /// Create a new RustRoute router
-    pub async fn new(config: RouterConfig) -> RustRouteResult<Self> {
-        Ok(Self {
+    pub async fn new(
+        config: RouterConfig,
+        routing_table: Arc<RwLock<RoutingTable>>,
+        metrics: Metrics,
+    ) -> RustRouteResult<Self> {
+        let router_uuid = Self::derive_router_uuid(&config.router_id);
+
+        let interfaces = if config.rip.enabled {
+            Self::initialize_network_interfaces(&config).await?
+        } else {
+            HashMap::new()
+        };
+
+        let mut router = Self {
             config,
-            routing_table: Arc::new(RwLock::new(RoutingTable::new())),
-            interfaces: HashMap::new(),
+            routing_table,
+            metrics,
             neighbors: Arc::new(RwLock::new(HashMap::new())),
-            metrics: Arc::new(MetricsCollector::new()),
-            sockets: HashMap::new(),
-            shutdown_sender: None,
-            running: false,
             start_time: Instant::now(),
-        })
+            router_uuid,
+            interfaces,
+        };
+
+        router.rebuild_routing_table().await?;
+        Ok(router)
     }
 
-    /// Add a network interface to the router
-    pub async fn add_interface(&mut self, interface: NetworkInterface) -> RustRouteResult<()> {
-        let interface_name = interface.config.name.clone();
-        let bind_addr = SocketAddr::new(
-            IpAddr::V4(interface.config.ip_address), 
-            self.config.port
-        );
-
-        // Create UDP socket for this interface
-        let socket = UdpSocket::bind(bind_addr).await
-            .map_err(|e| RustRouteError::NetworkError(format!("Failed to bind to {}: {}", bind_addr, e)))?;
-
-        // Enable broadcast
-        socket.set_broadcast(true)
-            .map_err(|e| RustRouteError::NetworkError(format!("Failed to enable broadcast: {}", e)))?;
-
-        log::info!("Created socket for interface {} on {}", interface_name, bind_addr);
-
-        self.sockets.insert(interface_name.clone(), Arc::new(socket));
-        self.interfaces.insert(interface_name, interface);
-        
-        Ok(())
+    pub fn router_id(&self) -> &str {
+        &self.config.router_id
     }
 
-    /// Run the router with real networking
-    pub async fn run_with_real_networking(&mut self, update_interval: Duration) -> RustRouteResult<()> {
-        self.running = true;
-        log::info!("Starting router with real RIP networking...");
-
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
-        self.shutdown_sender = Some(shutdown_tx);
-
-        // Clone necessary data for async tasks
-        let routing_table = Arc::clone(&self.routing_table);
-        let neighbors = Arc::clone(&self.neighbors);
-        let metrics = Arc::clone(&self.metrics);
-        let config = self.config.clone();
-
-        // Start packet receiver for each interface
-        let mut receiver_handles = Vec::new();
-        for (interface_name, socket) in &self.sockets {
-            let socket_clone = Arc::clone(socket);
-            let routing_table_clone = Arc::clone(&routing_table);
-            let neighbors_clone = Arc::clone(&neighbors);
-            let metrics_clone = Arc::clone(&metrics);
-            let config_clone = config.clone();
-            let interface_name_clone = interface_name.clone();
-
-            let handle = tokio::spawn(async move {
-                Self::packet_receiver(
-                    socket_clone,
-                    routing_table_clone,
-                    neighbors_clone,
-                    metrics_clone,
-                    config_clone,
-                    interface_name_clone,
-                ).await
-            });
-            receiver_handles.push(handle);
-        }
-
-        // Start periodic update sender
-        let sockets_clone: HashMap<String, Arc<UdpSocket>> = self.sockets.iter()
-            .map(|(k, v)| (k.clone(), Arc::clone(v)))
-            .collect();
-        
-        let update_handle = tokio::spawn(async move {
-            Self::periodic_update_sender(
-                sockets_clone,
-                routing_table,
-                neighbors,
-                metrics,
-                config,
-                update_interval,
-            ).await
-        });
-
-        // Wait for shutdown signal
-        tokio::select! {
-            _ = shutdown_rx.recv() => {
-                log::info!("Shutdown signal received");
-            }
-            result = update_handle => {
-                log::error!("Update sender finished unexpectedly: {:?}", result);
-            }
-        }
-
-        // Cancel all tasks
-        for handle in receiver_handles {
-            handle.abort();
-        }
-
-        self.running = false;
-        log::info!("Router stopped");
-        Ok(())
+    pub fn router_uuid(&self) -> Uuid {
+        self.router_uuid
     }
 
-    /// Packet receiver for a specific interface
-    async fn packet_receiver(
-        socket: Arc<UdpSocket>,
-        routing_table: Arc<RwLock<RoutingTable>>,
-        neighbors: Arc<RwLock<HashMap<IpAddr, RouterInfo>>>,
-        metrics: Arc<MetricsCollector>,
-        config: RouterConfig,
-        interface_name: String,
-    ) -> RustRouteResult<()> {
-        let mut buffer = [0u8; 65536];
-
-        loop {
-            match socket.recv_from(&mut buffer).await {
-                Ok((len, sender_addr)) => {
-                    metrics.increment_packets_received();
-                    
-                    // Parse JSON RIP packet
-                    if let Ok(packet_str) = std::str::from_utf8(&buffer[..len]) {
-                        if let Ok(packet) = RipPacket::from_json(packet_str) {
-                            log::debug!("Received RIP packet from {}: {:?}", sender_addr, packet.command);
-                            
-                            // Validate packet
-                            if packet.validate().is_ok() {
-                                Self::process_rip_packet(
-                                    packet,
-                                    sender_addr,
-                                    &routing_table,
-                                    &neighbors,
-                                    &metrics,
-                                    &config,
-                                    &interface_name,
-                                ).await;
-                            } else {
-                                log::warn!("Invalid RIP packet from {}", sender_addr);
-                                metrics.increment_packets_dropped();
-                            }
-                        } else {
-                            log::debug!("Failed to parse packet from {}", sender_addr);
-                            metrics.increment_packets_dropped();
-                        }
-                    } else {
-                        log::debug!("Non-UTF8 packet from {}", sender_addr);
-                        metrics.increment_packets_dropped();
-                    }
-                }
-                Err(e) => {
-                    log::error!("Error receiving packet on {}: {}", interface_name, e);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
     }
 
-    /// Process received RIP packet
-    async fn process_rip_packet(
-        packet: RipPacket,
-        sender_addr: SocketAddr,
-        routing_table: &Arc<RwLock<RoutingTable>>,
-        neighbors: &Arc<RwLock<HashMap<IpAddr, RouterInfo>>>,
-        metrics: &Arc<MetricsCollector>,
-        config: &RouterConfig,
-        interface_name: &str,
-    ) {
-        // Update neighbor information
-        {
-            let mut neighbors_lock = neighbors.write().await;
-            neighbors_lock.insert(sender_addr.ip(), RouterInfo {
-                router_id: uuid::Uuid::new_v4(), // Generate a UUID for now
-                last_seen: Instant::now(),
-                interface: interface_name.to_string(),
-                routes_count: packet.entries.len(),
-            });
-        }
-
-        match packet.command {
-            crate::protocol::RipCommand::Response => {
-                metrics.increment_routing_updates_received();
-                
-                // Process route updates
-                let mut routing_table_lock = routing_table.write().await;
-                let routes_count = packet.entries.len();
-                for route in packet.entries {
-                    // Apply distance vector algorithm
-                    let metric = std::cmp::min(route.metric + 1, config.max_hop_count as u32);
-                    
-                    let sender_ip = match sender_addr.ip() {
-                        std::net::IpAddr::V4(ip) => ip,
-                        _ => continue, // Skip IPv6 for now
-                    };
-                    
-                    if routing_table_lock.update_route(
-                        route.ip_address,
-                        route.subnet_mask,
-                        sender_ip,
-                        metric,
-                        interface_name.to_string(),
-                        Some(sender_ip),
-                    ) {
-                        metrics.increment_route_changes();
-                        log::info!("Updated route to {}/{} via {} metric {}", 
-                                 route.ip_address, route.subnet_mask, sender_addr.ip(), metric);
-                    }
-                }
-                
-                log::debug!("Processed {} routes from {}", routes_count, sender_addr);
-            }
-            crate::protocol::RipCommand::Request => {
-                log::debug!("Received route request from {}", sender_addr);
-                // Note: Response would be sent in periodic updates
-            }
-        }
+    pub fn routing_table(&self) -> Arc<RwLock<RoutingTable>> {
+        Arc::clone(&self.routing_table)
     }
 
-    /// Periodic update sender
-    async fn periodic_update_sender(
-        sockets: HashMap<String, Arc<UdpSocket>>,
-        routing_table: Arc<RwLock<RoutingTable>>,
-        neighbors: Arc<RwLock<HashMap<IpAddr, RouterInfo>>>,
-        metrics: Arc<MetricsCollector>,
-        config: RouterConfig,
-        update_interval: Duration,
-    ) -> RustRouteResult<()> {
-        let mut interval_timer = tokio::time::interval(update_interval);
-            
-            loop {
-                interval_timer.tick().await;
-
-            // Clean up expired neighbors
-            {
-                let mut neighbors_lock = neighbors.write().await;
-                let now = Instant::now();
-                neighbors_lock.retain(|_, neighbor| {
-                    now.duration_since(neighbor.last_seen) < Duration::from_secs(180)
-                });
-            }
-
-            // Process route timeouts and garbage collection
-            {
-                let mut routing_table_lock = routing_table.write().await;
-                routing_table_lock.process_timeouts();
-                routing_table_lock.garbage_collect();
-            }
-
-            // Send route updates
-            let routes = {
-                let routing_table_lock = routing_table.read().await;
-                routing_table_lock.get_all_routes().into_iter().cloned().collect::<Vec<_>>()
-            };
-
-            if !routes.is_empty() {
-                let packet = RipPacket::new_update(config.router_id, routes);
-                let packet_json = packet.to_json().unwrap();
-                let packet_bytes = packet_json.as_bytes();
-
-                // Send to broadcast address on each interface
-                for (interface_name, socket) in &sockets {
-                    let broadcast_addr = SocketAddr::new(
-                        IpAddr::V4(Ipv4Addr::BROADCAST), 
-                        config.port
-                    );
-
-                    match socket.send_to(packet_bytes, broadcast_addr).await {
-                        Ok(_) => {
-                            metrics.increment_packets_sent();
-                            metrics.increment_routing_updates_sent();
-                            log::debug!("Sent {} routes on interface {}", packet.entries.len(), interface_name);
-                        }
-                        Err(e) => {
-                            log::error!("Failed to send update on {}: {}", interface_name, e);
-                        }
-                    }
-                }
-            }
-        }
+    pub fn config(&self) -> &RouterConfig {
+        &self.config
     }
 
-    /// Get real-time router statistics
-    pub async fn get_real_statistics(&self) -> RouterStatistics {
-        let routing_table_lock = self.routing_table.read().await;
-        let neighbors_lock = self.neighbors.read().await;
-        let routing_stats = routing_table_lock.get_stats();
-        let uptime = self.start_time.elapsed();
+    pub fn config_snapshot(&self) -> RouterConfig {
+        self.config.clone()
+    }
+
+    pub fn neighbors(&self) -> Arc<RwLock<HashMap<IpAddr, NeighborInfo>>> {
+        Arc::clone(&self.neighbors)
+    }
+
+    pub fn network_interfaces(&self) -> Vec<Arc<NetworkInterface>> {
+        self.interfaces.values().cloned().collect()
+    }
+
+    pub fn rip_config(&self) -> &RipConfig {
+        &self.config.rip
+    }
+
+    pub fn rip_enabled(&self) -> bool {
+        self.config.rip.enabled && !self.interfaces.is_empty()
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.start_time.elapsed()
+    }
+
+    pub async fn apply_config(&mut self, config: RouterConfig) -> RustRouteResult<()> {
+        self.config = config;
+        self.router_uuid = Self::derive_router_uuid(&self.config.router_id);
+
+        if self.config.rip.enabled {
+            warn!(
+                "Runtime interface reconfiguration is only partially supported; please restart after interface changes."
+            );
+        }
+        self.rebuild_routing_table().await
+    }
+
+    pub async fn restart(&mut self) -> RustRouteResult<()> {
+        self.metrics.reset();
+        self.start_time = Instant::now();
+        self.rebuild_routing_table().await
+    }
+
+    pub async fn statistics(&self) -> RouterStatistics {
+        let routing_table = self.routing_table.read().await;
+        let table_stats = routing_table.get_stats();
+        let neighbor_count = self.neighbors.read().await.len();
+        let metrics_snapshot = self
+            .metrics
+            .snapshot(neighbor_count, table_stats.total_routes);
 
         RouterStatistics {
-            uptime: format!("{}时{}分{}秒", 
-                          uptime.as_secs() / 3600,
-                          (uptime.as_secs() % 3600) / 60,
-                          uptime.as_secs() % 60),
-            packets_sent: self.metrics.get_packets_sent(),
-            packets_received: self.metrics.get_packets_received(),
-            route_count: routing_stats.total_routes,
-            neighbor_count: neighbors_lock.len(),
-            memory_usage: Self::get_memory_usage(),
+            uptime: format_duration(metrics_snapshot.uptime_seconds),
+            packets_sent: metrics_snapshot.packets_sent,
+            packets_received: metrics_snapshot.packets_received,
+            route_count: table_stats.total_routes,
+            neighbor_count,
+            memory_usage: current_process_memory_bytes(),
+            table_breakdown: table_stats,
         }
     }
 
-    /// Get memory usage (simplified)
-    fn get_memory_usage() -> u64 {
-        // In a real implementation, this would get actual memory usage
-        // For now, return a reasonable estimate
-        std::process::id() as u64 * 1024 * 1024 // Simple estimation
-    }
+    async fn rebuild_routing_table(&mut self) -> RustRouteResult<()> {
+        let mut table = self.routing_table.write().await;
 
-    /// Shutdown the router gracefully
-    pub async fn shutdown(&mut self) -> RustRouteResult<()> {
-        if let Some(sender) = &self.shutdown_sender {
-            let _ = sender.send(()).await;
+        // Remove previously derived direct routes before re-applying
+        table.clear_source(RouteSource::Direct);
+
+        for iface in &self.config.interfaces {
+            if !iface.enabled {
+                continue;
+            }
+
+            if let Some(net) = parse_ipv4_net(iface)? {
+                table.install_direct_route(net.network(), net.netmask(), iface.name.clone());
+            }
         }
-        self.running = false;
-        log::info!("Router shutdown initiated");
+
+        self.metrics.update_route_count(table.route_count());
+
         Ok(())
+    }
+
+    pub async fn learn_neighbor(&self, address: IpAddr, interface: Option<String>, routes: usize) {
+        let mut neighbors = self.neighbors.write().await;
+        neighbors.insert(
+            address,
+            NeighborInfo {
+                address,
+                interface,
+                last_seen: Instant::now(),
+                learned_routes: routes,
+            },
+        );
+    }
+
+    pub async fn cleanup_neighbors(&self, max_age: Duration) {
+        let mut neighbors = self.neighbors.write().await;
+        neighbors.retain(|_, info| info.last_seen.elapsed() <= max_age);
+    }
+
+    fn derive_router_uuid(router_id: &str) -> Uuid {
+        if let Ok(uuid) = Uuid::parse_str(router_id) {
+            uuid
+        } else {
+            Uuid::new_v4()
+        }
+    }
+
+    async fn initialize_network_interfaces(
+        config: &RouterConfig,
+    ) -> RustRouteResult<HashMap<String, Arc<NetworkInterface>>> {
+        let mut map = HashMap::new();
+
+        for iface in &config.interfaces {
+            if !iface.enabled {
+                continue;
+            }
+
+            let Some(net) = parse_ipv4_net(iface)? else {
+                continue;
+            };
+
+            let host_ip = net.addr();
+            let subnet_mask = net.netmask();
+
+            let mut interface = NetworkInterface::new(NetInterfaceConfig {
+                name: iface.name.clone(),
+                ip_address: host_ip,
+                subnet_mask,
+                multicast_address: Ipv4Addr::new(224, 0, 0, 9),
+                port: config.rip.port,
+                mtu: 1500,
+                enabled: true,
+            });
+
+            match interface.initialize().await {
+                Ok(_) => {
+                    map.insert(iface.name.clone(), Arc::new(interface));
+                }
+                Err(err) => {
+                    warn!(
+                        "Skipping interface {} ({}): {}",
+                        iface.name, iface.address, err
+                    );
+                }
+            }
+        }
+
+        Ok(map)
     }
 }
 
+fn parse_ipv4_net(interface: &InterfaceConfig) -> RustRouteResult<Option<Ipv4Net>> {
+    let cidr = interface.address.trim();
+    if cidr.is_empty() {
+        return Err(RustRouteError::InvalidInput(format!(
+            "Interface {} is missing an address",
+            interface.name
+        )));
+    }
+
+    match cidr.parse::<IpNet>() {
+        Ok(IpNet::V4(v4)) => Ok(Some(v4)),
+        Ok(IpNet::V6(_)) => Ok(None), // IPv6 handled separately
+        Err(err) => Err(RustRouteError::InvalidInput(format!(
+            "Invalid interface address {}: {}",
+            interface.address, err
+        ))),
+    }
+}
+
+fn format_duration(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let secs = seconds % 60;
+    format!("{}时{}分{}秒", hours, minutes, secs)
+}
+
+fn current_process_memory_bytes() -> u64 {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                if let Some(value) = rest.split_whitespace().next() {
+                    if let Ok(kb) = value.parse::<u64>() {
+                        return kb * 1024;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+pub async fn handle_rip_response(
+    routing_table: Arc<RwLock<RoutingTable>>,
+    neighbors: Arc<RwLock<HashMap<IpAddr, NeighborInfo>>>,
+    metrics: Metrics,
+    rip_config: Arc<RipConfig>,
+    interface_name: String,
+    packet: RipPacket,
+    sender: SocketAddr,
+) -> RustRouteResult<Vec<Route>> {
+    let sender_ip = match sender.ip() {
+        IpAddr::V4(ip) => ip,
+        _ => {
+            warn!("Ignoring non-IPv4 RIP response from {}", sender);
+            return Ok(Vec::new());
+        }
+    };
+
+    let entries = packet.entries;
+    let learned_count = entries.len();
+    let mut updated = false;
+    let mut updated_routes = Vec::new();
+
+    {
+        let mut table = routing_table.write().await;
+
+        for entry in entries {
+            let mut metric = entry.metric.saturating_add(1);
+            if metric > rip_config.infinity_metric {
+                metric = rip_config.infinity_metric;
+            }
+
+            if metric >= rip_config.infinity_metric {
+                continue;
+            }
+
+            let next_hop = if entry.next_hop.is_unspecified() {
+                sender_ip
+            } else {
+                entry.next_hop
+            };
+
+            let route = Route::new(
+                entry.ip_address,
+                entry.subnet_mask,
+                next_hop,
+                metric,
+                interface_name.clone(),
+                RouteSource::Dynamic,
+                Some(sender_ip),
+            );
+
+            if table.add_or_replace(route.clone()) {
+                updated = true;
+                updated_routes.push(route);
+            }
+        }
+
+        if updated {
+            metrics.increment_routing_updates_received();
+        }
+
+        metrics.update_route_count(table.route_count());
+    }
+
+    {
+        let mut neighbor_map = neighbors.write().await;
+        neighbor_map.insert(
+            IpAddr::V4(sender_ip),
+            NeighborInfo {
+                address: IpAddr::V4(sender_ip),
+                interface: Some(interface_name.clone()),
+                last_seen: Instant::now(),
+                learned_routes: learned_count,
+            },
+        );
+    }
+
+    if updated {
+        debug!(
+            "Updated routes from neighbor {} via {}",
+            sender_ip, interface_name
+        );
+    }
+
+    Ok(updated_routes)
+}
+
 /// Router statistics for CLI display
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterStatistics {
     pub uptime: String,
     pub packets_sent: u64,
@@ -431,4 +373,5 @@ pub struct RouterStatistics {
     pub route_count: usize,
     pub neighbor_count: usize,
     pub memory_usage: u64,
+    pub table_breakdown: RoutingTableStatistics,
 }

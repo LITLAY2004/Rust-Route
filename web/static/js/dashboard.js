@@ -4,62 +4,80 @@ class RustRouteDashboard {
         this.apiBase = '/api';
         this.updateInterval = 5000; // 5 seconds
         this.charts = {};
-        this.ws = null;
-        
-        this.initializeWebSocket();
+        this.maxDataPoints = 20;
+        this.trafficHistory = {
+            labels: [],
+            inbound: [],
+            outbound: [],
+        };
+        this.lastMetricSnapshot = null;
+        this.eventSource = null;
     }
 
-    async initializeWebSocket() {
+    initialize() {
+        this.initializeCharts();
+        this.refreshEventStream();
+        this.startRealTimeUpdates();
+        if (window.authUI) {
+            window.authUI.attachDashboard(this);
+        }
+    }
+
+    initializeEventStream() {
         try {
-            this.ws = new WebSocket(`ws://${window.location.host}/ws`);
-            
-            this.ws.onopen = () => {
-                console.log('WebSocket connected');
+            const token = window.authClient?.getToken?.();
+            const url = token
+                ? `/api/events?token=${encodeURIComponent(token)}`
+                : '/api/events';
+            this.eventSource = new EventSource(url);
+            this.eventSource.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    this.handleEvent(payload);
+                } catch (err) {
+                    console.error('Failed to parse event payload', err);
+                }
             };
-            
-            this.ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                this.handleRealtimeUpdate(data);
-            };
-            
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected, attempting to reconnect...');
-                setTimeout(() => this.initializeWebSocket(), 5000);
-            };
-            
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+            this.eventSource.onerror = (error) => {
+                console.warn('Event stream error:', error);
             };
         } catch (error) {
-            console.error('Failed to initialize WebSocket:', error);
+            console.error('Failed to initialize event stream:', error);
         }
     }
 
-    handleRealtimeUpdate(data) {
-        switch (data.type) {
-            case 'system_status':
-                this.updateSystemStatus(data.payload);
+    refreshEventStream() {
+        if (this.eventSource) {
+            this.eventSource.close();
+            this.eventSource = null;
+        }
+        this.initializeEventStream();
+    }
+
+    handleEvent(event) {
+        switch (event.type) {
+            case 'Metrics':
+                if (event.data && event.data.snapshot) {
+                    this.handleMetricsEvent(event.data.snapshot);
+                }
                 break;
-            case 'route_update':
-                this.updateRouteInfo(data.payload);
+            case 'Route':
+                this.handleRouteEvent(event.data);
                 break;
-            case 'activity':
-                this.addActivityItem(data.payload);
+            case 'Activity':
+                this.handleActivityEvent(event.data);
                 break;
+            default:
+                console.debug('Unhandled event type', event);
         }
     }
 
-    async fetchAPI(endpoint) {
-        try {
-            const response = await fetch(`${this.apiBase}${endpoint}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return await response.json();
-        } catch (error) {
-            console.error(`API fetch error for ${endpoint}:`, error);
-            throw error;
+    async fetchAPI(endpoint, options = {}) {
+        const response = await window.fetchWithAuth(`${this.apiBase}${endpoint}`, options);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
+        return await response.json();
     }
 
     async loadSystemStatus() {
@@ -69,38 +87,48 @@ class RustRouteDashboard {
                 this.updateSystemStatus(response.data);
             }
         } catch (error) {
+            if (error instanceof window.RustRouteAuthError) {
+                return;
+            }
             console.error('Failed to load system status:', error);
-            this.showError('Failed to load system status');
+            this.showError('无法加载系统状态');
         }
     }
 
     updateSystemStatus(status) {
-        // Update uptime
+        if (window.authUI?.setAuthRequired) {
+            window.authUI.setAuthRequired(Boolean(status.auth_required));
+        }
+
         const uptimeElement = document.getElementById('uptime');
         if (uptimeElement) {
-            uptimeElement.textContent = this.formatUptime(status.uptime);
+            uptimeElement.textContent = this.formatUptime(status.uptime_seconds ?? 0);
         }
 
-        // Update route count
         const routeCountElement = document.getElementById('route-count');
         if (routeCountElement) {
-            routeCountElement.textContent = status.route_count.toString();
+            routeCountElement.textContent = status.route_count ?? 0;
         }
 
-        // Update interface count
         const interfaceCountElement = document.getElementById('interface-count');
         if (interfaceCountElement) {
-            interfaceCountElement.textContent = status.interfaces.length.toString();
+            interfaceCountElement.textContent = (status.interfaces || []).length;
         }
 
-        // Update memory usage
         const memoryUsageElement = document.getElementById('memory-usage');
-        if (memoryUsageElement) {
+        if (memoryUsageElement && typeof status.memory_usage === 'number') {
             memoryUsageElement.textContent = this.formatBytes(status.memory_usage);
         }
 
-        // Update interface grid
-        this.updateInterfaceGrid(status.interfaces);
+        this.updateInterfaceGrid(status.interfaces || []);
+
+        if (status.metrics) {
+            this.handleMetricsEvent(status.metrics);
+        }
+
+        if (status.router_stats && status.router_stats.table_breakdown) {
+            this.updateRouteChart(status.router_stats.table_breakdown);
+        }
     }
 
     async loadInterfaces() {
@@ -110,6 +138,9 @@ class RustRouteDashboard {
                 this.updateInterfaceGrid(response.data);
             }
         } catch (error) {
+            if (error instanceof window.RustRouteAuthError) {
+                return;
+            }
             console.error('Failed to load interfaces:', error);
         }
     }
@@ -122,16 +153,16 @@ class RustRouteDashboard {
             <div class="interface-card">
                 <div class="interface-header">
                     <div class="interface-name">${iface.name}</div>
-                    <div class="interface-status ${iface.status.toLowerCase()}">${iface.status}</div>
+                    <div class="interface-status ${(iface.status || 'unknown').toLowerCase()}">${iface.status || 'unknown'}</div>
                 </div>
                 <div class="interface-details">
-                    <div>IP: ${iface.address}</div>
+                    <div>IP: ${iface.address ?? '-'}</div>
                 </div>
                 <div class="interface-stats">
-                    <div>TX: ${this.formatBytes(iface.bytes_sent)}</div>
-                    <div>RX: ${this.formatBytes(iface.bytes_received)}</div>
-                    <div>Sent: ${iface.packets_sent}</div>
-                    <div>Recv: ${iface.packets_received}</div>
+                    <div>TX: ${this.formatBytes(iface.bytes_sent ?? 0)}</div>
+                    <div>RX: ${this.formatBytes(iface.bytes_received ?? 0)}</div>
+                    <div>Sent: ${iface.packets_sent ?? 0}</div>
+                    <div>Recv: ${iface.packets_received ?? 0}</div>
                 </div>
             </div>
         `).join('');
@@ -149,16 +180,16 @@ class RustRouteDashboard {
         this.charts.traffic = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: this.generateTimeLabels(20),
+                labels: [],
                 datasets: [{
-                    label: 'Bytes In',
-                    data: this.generateRandomData(20, 1000, 5000),
+                    label: 'Packets In',
+                    data: [],
                     borderColor: 'rgb(37, 99, 235)',
                     backgroundColor: 'rgba(37, 99, 235, 0.1)',
                     tension: 0.4
                 }, {
-                    label: 'Bytes Out',
-                    data: this.generateRandomData(20, 800, 4000),
+                    label: 'Packets Out',
+                    data: [],
                     borderColor: 'rgb(16, 185, 129)',
                     backgroundColor: 'rgba(16, 185, 129, 0.1)',
                     tension: 0.4
@@ -168,18 +199,49 @@ class RustRouteDashboard {
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
+                    x: {
+                        ticks: {
+                            font: { size: 12 },
+                            maxTicksLimit: 10
+                        },
+                        grid: {
+                            display: true,
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        }
+                    },
                     y: {
                         beginAtZero: true,
                         ticks: {
-                            callback: (value) => this.formatBytes(value)
+                            font: { size: 12 },
+                            callback: value => `${value} pkts`,
+                            maxTicksLimit: 8
+                        },
+                        grid: {
+                            display: true,
+                            color: 'rgba(0, 0, 0, 0.05)'
                         }
                     }
                 },
                 plugins: {
                     legend: {
                         position: 'top',
+                        labels: {
+                            font: { size: 13 },
+                            padding: 20,
+                            usePointStyle: true
+                        }
                     }
-                }
+                },
+                elements: {
+                    point: {
+                        radius: 3,
+                        hoverRadius: 6
+                    },
+                    line: {
+                        borderWidth: 2
+                    }
+                },
+                animation: { duration: 600 }
             }
         });
     }
@@ -193,7 +255,7 @@ class RustRouteDashboard {
             data: {
                 labels: ['Learned Routes', 'Static Routes', 'Connected Routes'],
                 datasets: [{
-                    data: [15, 5, 8],
+                    data: [0, 0, 0],
                     backgroundColor: [
                         'rgb(37, 99, 235)',
                         'rgb(16, 185, 129)',
@@ -208,73 +270,124 @@ class RustRouteDashboard {
                 plugins: {
                     legend: {
                         position: 'bottom',
+                        labels: {
+                            font: { size: 12 },
+                            padding: 15,
+                            usePointStyle: true
+                        }
                     }
-                }
+                },
+                cutout: '60%',
+                animation: { duration: 600 }
             }
         });
     }
 
-    addActivityItem(activity) {
+    updateRouteChart(breakdown) {
+        if (!this.charts.route) return;
+        const dataset = this.charts.route.data.datasets[0];
+        dataset.data = [
+            breakdown.learned_routes ?? 0,
+            breakdown.static_routes ?? 0,
+            breakdown.direct_routes ?? 0,
+        ];
+        this.charts.route.update('none');
+    }
+
+    startRealTimeUpdates() {
+        this.loadSystemStatus();
+        this.loadInterfaces();
+
+        setInterval(() => {
+            this.loadSystemStatus();
+        }, this.updateInterval);
+
+        setInterval(() => {
+            this.loadInterfaces();
+        }, this.updateInterval * 2);
+    }
+
+    handleMetricsEvent(snapshot) {
+        if (!this.charts.traffic) {
+            return;
+        }
+
+        if (!this.lastMetricSnapshot) {
+            this.lastMetricSnapshot = snapshot;
+            return;
+        }
+
+        const inboundDelta = Math.max(
+            0,
+            (snapshot.packets_received ?? 0) - (this.lastMetricSnapshot.packets_received ?? 0)
+        );
+        const outboundDelta = Math.max(
+            0,
+            (snapshot.packets_sent ?? 0) - (this.lastMetricSnapshot.packets_sent ?? 0)
+        );
+        this.lastMetricSnapshot = snapshot;
+
+        const label = this.formatTime(new Date());
+        this.trafficHistory.labels.push(label);
+        this.trafficHistory.inbound.push(inboundDelta);
+        this.trafficHistory.outbound.push(outboundDelta);
+
+        if (this.trafficHistory.labels.length > this.maxDataPoints) {
+            this.trafficHistory.labels.shift();
+            this.trafficHistory.inbound.shift();
+            this.trafficHistory.outbound.shift();
+        }
+
+        const chart = this.charts.traffic;
+        chart.data.labels = [...this.trafficHistory.labels];
+        chart.data.datasets[0].data = [...this.trafficHistory.inbound];
+        chart.data.datasets[1].data = [...this.trafficHistory.outbound];
+        chart.update('none');
+    }
+
+    handleRouteEvent(event) {
+        if (!event) return;
+        const message = `Route ${event.destination}/${event.subnet_mask} metric ${event.metric} via ${event.next_hop}`;
+        this.addActivityItem({
+            time: this.formatTime(new Date()),
+            level: 'info',
+            message,
+        });
+    }
+
+    handleActivityEvent(event) {
+        if (!event) return;
+        const level = (event.level || 'Info').toString().toLowerCase();
+        this.addActivityItem({
+            time: this.formatTime(new Date()),
+            level,
+            message: event.message || '',
+        });
+    }
+
+    addActivityItem({ time, level, message }) {
         const activityLog = document.getElementById('activity-log');
         if (!activityLog) return;
 
         const activityItem = document.createElement('div');
         activityItem.className = 'activity-item';
         activityItem.innerHTML = `
-            <span class="activity-time">${this.formatTime(new Date())}</span>
-            <span class="activity-type ${activity.type.toLowerCase()}">${activity.type.toUpperCase()}</span>
-            <span class="activity-message">${activity.message}</span>
+            <span class="activity-time">${time}</span>
+            <span class="activity-type ${level}">${level.toUpperCase()}</span>
+            <span class="activity-message">${message}</span>
         `;
 
-        // Insert at the beginning
         activityLog.insertBefore(activityItem, activityLog.firstChild);
-
-        // Keep only the last 10 items
         while (activityLog.children.length > 10) {
             activityLog.removeChild(activityLog.lastChild);
         }
     }
 
-    startRealTimeUpdates() {
-        // Initial load
-        this.loadSystemStatus();
-        this.loadInterfaces();
-
-        // Set up periodic updates
-        setInterval(() => {
-            this.loadSystemStatus();
-            this.updateTrafficChart();
-        }, this.updateInterval);
-
-        // Update interfaces less frequently
-        setInterval(() => {
-            this.loadInterfaces();
-        }, this.updateInterval * 2);
-    }
-
-    updateTrafficChart() {
-        if (!this.charts.traffic) return;
-
-        const chart = this.charts.traffic;
-        
-        // Remove first data point and add new one
-        chart.data.labels.shift();
-        chart.data.labels.push(this.formatTime(new Date()));
-        
-        chart.data.datasets.forEach(dataset => {
-            dataset.data.shift();
-            dataset.data.push(Math.floor(Math.random() * 5000) + 1000);
-        });
-        
-        chart.update('none');
-    }
-
-    // Utility functions
     formatUptime(seconds) {
         const days = Math.floor(seconds / 86400);
         const hours = Math.floor((seconds % 86400) / 3600);
         const minutes = Math.floor((seconds % 3600) / 60);
-        
+
         if (days > 0) {
             return `${days}d ${hours}h ${minutes}m`;
         } else if (hours > 0) {
@@ -285,59 +398,27 @@ class RustRouteDashboard {
     }
 
     formatBytes(bytes) {
-        if (bytes === 0) return '0 B';
-        
+        if (!bytes) return '0 B';
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
     }
 
     formatTime(date) {
         return date.toTimeString().split(' ')[0];
     }
 
-    generateTimeLabels(count) {
-        const labels = [];
-        const now = new Date();
-        
-        for (let i = count - 1; i >= 0; i--) {
-            const time = new Date(now.getTime() - i * 60000); // 1 minute intervals
-            labels.push(this.formatTime(time));
-        }
-        
-        return labels;
-    }
-
-    generateRandomData(count, min, max) {
-        return Array.from({ length: count }, () => 
-            Math.floor(Math.random() * (max - min + 1)) + min
-        );
-    }
-
     showError(message) {
         console.error(message);
-        // Could implement a toast notification system here
-    }
-
-    showSuccess(message) {
-        console.log(message);
-        // Could implement a toast notification system here
     }
 }
 
-// Global functions
 function initializeDashboard() {
     window.dashboard = new RustRouteDashboard();
-    window.dashboard.initializeCharts();
+    window.dashboard.initialize();
 }
 
-function startRealTimeUpdates() {
-    window.dashboard.startRealTimeUpdates();
-}
-
-// Export for module use
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = RustRouteDashboard;
 }
