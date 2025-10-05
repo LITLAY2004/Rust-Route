@@ -1,40 +1,22 @@
-# Rust
-/target/
-# 注意：我们保留 Cargo.lock 用于确保依赖版本一致性
-# Cargo.lock
+# Rust build artifacts and package metadata
+target/
+**/*.rs.bk
 
-# IDE
+# Generated coverage and benchmarking outputs
+*/reports/
+*.profraw
+
+# Editor and IDE settings
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+# Logs and temporary files
 *.log
-
-# Runtime
-*.pid
-*.seed
 *.tmp
+*.lock
+.DS_Store
 
-# Coverage
-*.profraw
-/coverage/
-lcov.info
-
-# Benchmarks
-/target/criterion/
-
-# Security
-*.pem
-*.key
-secrets.json
-
-# Local development
-.env
-.env.local
-config.local.json
+# Local runtime configs
+/tmp/rust-route-demo.json
